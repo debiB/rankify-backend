@@ -2,6 +2,9 @@ import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { protectedProcedure, adminProcedure, router } from '../context';
 import { prisma } from '../../utils/prisma';
+import { AnalyticsService } from '../../services/analytics';
+
+const analyticsService = new AnalyticsService();
 
 const createCampaignSchema = z.object({
   name: z.string().min(1, 'Campaign name is required'),
@@ -91,6 +94,12 @@ export const campaignsRouter = router({
           },
         });
 
+        // Fetch the analytics (without waiting)
+        analyticsService.fetchAndSaveAnalytics({
+          campaignId: campaign.id,
+          waitForAllData: false,
+        });
+
         return campaign;
       } catch (error) {
         if (error instanceof TRPCError) {
@@ -110,9 +119,7 @@ export const campaignsRouter = router({
         page: z.number().min(1).default(1),
         limit: z.number().min(1).max(100).default(10),
         search: z.string().optional(),
-        statusFilter: z
-          .enum(['all', 'ACTIVE', 'PAUSED'])
-          .default('all'),
+        statusFilter: z.enum(['all', 'ACTIVE', 'PAUSED']).default('all'),
         userId: z.string().optional(),
       })
     )
@@ -168,10 +175,14 @@ export const campaignsRouter = router({
 
         return {
           campaigns,
-          total,
-          page,
-          limit,
-          totalPages: Math.ceil(total / limit),
+          pagination: {
+            page,
+            limit,
+            totalCount: total,
+            totalPages: Math.ceil(total / limit),
+            hasNextPage: page < Math.ceil(total / limit),
+            hasPrevPage: page > 1,
+          },
         };
       } catch (error) {
         throw new TRPCError({
@@ -244,6 +255,12 @@ export const campaignsRouter = router({
           });
         }
 
+        // Check if starting date is being updated
+        const isStartingDateChanged =
+          updateData.startingDate &&
+          existingCampaign.startingDate.getTime() !==
+            updateData.startingDate.getTime();
+
         // Update the campaign
         const campaign = await prisma.campaign.update({
           where: { id },
@@ -265,6 +282,14 @@ export const campaignsRouter = router({
             },
           },
         });
+
+        // Trigger analytics fetch if starting date changed
+        if (isStartingDateChanged) {
+          analyticsService.fetchAndSaveAnalytics({
+            campaignId: campaign.id,
+            waitForAllData: false,
+          });
+        }
 
         return campaign;
       } catch (error) {
@@ -312,13 +337,42 @@ export const campaignsRouter = router({
       }
     }),
 
-  // Get campaigns by user ID
+  // Get campaigns by user ID with pagination
   getCampaignsByUser: adminProcedure
-    .input(z.object({ userId: z.string() }))
+    .input(
+      z.object({
+        userId: z.string(),
+        page: z.number().min(1).default(1),
+        limit: z.number().min(1).max(100).default(10),
+        search: z.string().optional(),
+        statusFilter: z.enum(['all', 'ACTIVE', 'PAUSED']).default('all'),
+      })
+    )
     .query(async ({ input }) => {
       try {
+        const { userId, page, limit, search, statusFilter } = input;
+        const skip = (page - 1) * limit;
+
+        // Build where clause
+        const where: any = { userId };
+
+        if (search) {
+          where.OR = [
+            { name: { contains: search, mode: 'insensitive' } },
+            { searchConsoleSite: { contains: search, mode: 'insensitive' } },
+          ];
+        }
+
+        if (statusFilter !== 'all') {
+          where.status = statusFilter;
+        }
+
+        // Get total count for pagination
+        const totalCount = await prisma.campaign.count({ where });
+
+        // Get paginated campaigns
         const campaigns = await prisma.campaign.findMany({
-          where: { userId: input.userId },
+          where,
           orderBy: { createdAt: 'desc' },
           include: {
             user: {
@@ -336,9 +390,21 @@ export const campaignsRouter = router({
               },
             },
           },
+          skip,
+          take: limit,
         });
 
-        return campaigns;
+        return {
+          campaigns,
+          pagination: {
+            page,
+            limit,
+            totalCount,
+            totalPages: Math.ceil(totalCount / limit),
+            hasNextPage: page < Math.ceil(totalCount / limit),
+            hasPrevPage: page > 1,
+          },
+        };
       } catch (error) {
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
@@ -365,7 +431,8 @@ export const campaignsRouter = router({
         }
 
         // Toggle the status
-        const newStatus = existingCampaign.status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE';
+        const newStatus =
+          existingCampaign.status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE';
 
         // Update the campaign status
         const campaign = await prisma.campaign.update({
@@ -397,6 +464,220 @@ export const campaignsRouter = router({
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: 'Failed to toggle campaign status',
+        });
+      }
+    }),
+
+  // Get analytics data for a campaign
+  getCampaignAnalytics: adminProcedure
+    .input(z.object({ 
+      campaignId: z.string(),
+      selectedMonth: z.string().optional() // Add selected month parameter
+    }))
+    .query(async ({ input }) => {
+      try {
+        // Get the campaign
+        const campaign = await prisma.campaign.findUnique({
+          where: { id: input.campaignId },
+        });
+
+        if (!campaign) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'Campaign not found',
+          });
+        }
+
+        // Get analytics data
+        const analytics = await prisma.searchConsoleKeywordAnalytics.findFirst({
+          where: { siteUrl: campaign.searchConsoleSite },
+          include: {
+            keywords: {
+              include: {
+                monthlyStats: {
+                  orderBy: [{ year: 'asc' }, { month: 'asc' }],
+                },
+              },
+            },
+          },
+        });
+
+        if (!analytics) {
+          return {
+            keywords: [],
+            months: [],
+          };
+        }
+
+        // Process the data for the frontend
+        const keywords = analytics.keywords.map((keyword) => {
+          try {
+            const monthlyData: Record<string, number | null> = {};
+            const currentMonth = new Date().getMonth() + 1;
+            const currentYear = new Date().getFullYear();
+
+            // Initialize all months with null
+            for (
+              let year = new Date(campaign.startingDate).getFullYear();
+              year <= currentYear;
+              year++
+            ) {
+              const startMonth =
+                year === new Date(campaign.startingDate).getFullYear()
+                  ? new Date(campaign.startingDate).getMonth() + 1
+                  : 1;
+              const endMonth = year === currentYear ? currentMonth : 12;
+
+              for (let month = startMonth; month <= endMonth; month++) {
+                const monthKey = `${month}/${year}`;
+                monthlyData[monthKey] = null;
+              }
+            }
+
+            // Fill in actual data
+            if (keyword.monthlyStats && Array.isArray(keyword.monthlyStats)) {
+              keyword.monthlyStats.forEach((stat) => {
+                if (
+                  stat &&
+                  typeof stat.month === 'number' &&
+                  typeof stat.year === 'number'
+                ) {
+                  const monthKey = `${stat.month}/${stat.year}`;
+                  monthlyData[monthKey] = stat.averageRank || null;
+                }
+              });
+            }
+
+            // Find the selected month's data
+            let selectedMonthStat = null;
+            if (input.selectedMonth) {
+              const selectedMonthParts = input.selectedMonth.split(' ');
+              const selectedMonthName = selectedMonthParts[0];
+              const selectedYear = selectedMonthParts[1];
+              
+              const monthNames = [
+                'January', 'February', 'March', 'April', 'May', 'June',
+                'July', 'August', 'September', 'October', 'November', 'December'
+              ];
+              const selectedMonthNum = monthNames.indexOf(selectedMonthName) + 1;
+              
+              selectedMonthStat = keyword.monthlyStats?.find(
+                stat => stat.month === selectedMonthNum && stat.year === parseInt(selectedYear)
+              );
+            }
+
+            // Calculate changes
+            const stats = keyword.monthlyStats || [];
+            const latestStat =
+              stats.length > 0 ? stats[stats.length - 1] : null;
+
+            // Use selected month stat if available, otherwise use latest
+            const currentStat = selectedMonthStat || latestStat;
+
+            // Find the previous month stat for the selected month
+            let previousMonthStat = null;
+            if (selectedMonthStat) {
+              // Find the month before the selected month
+              const selectedMonthParts = input.selectedMonth!.split(' ');
+              const selectedMonthName = selectedMonthParts[0];
+              const selectedYear = selectedMonthParts[1];
+              
+              const monthNames = [
+                'January', 'February', 'March', 'April', 'May', 'June',
+                'July', 'August', 'September', 'October', 'November', 'December'
+              ];
+              const selectedMonthNum = monthNames.indexOf(selectedMonthName) + 1;
+              
+              // Calculate previous month
+              let prevMonth = selectedMonthNum - 1;
+              let prevYear = parseInt(selectedYear);
+              if (prevMonth === 0) {
+                prevMonth = 12;
+                prevYear--;
+              }
+              
+              previousMonthStat = keyword.monthlyStats?.find(
+                stat => stat.month === prevMonth && stat.year === prevYear
+              );
+            } else {
+              // Fallback to the second-to-last stat
+              previousMonthStat = stats.length > 1 ? stats[stats.length - 2] : null;
+            }
+
+            const monthlyChange =
+              previousMonthStat && currentStat
+                ? (previousMonthStat.averageRank || 0) -
+                  (currentStat.averageRank || 0)
+                : 0;
+
+            const overallChange = currentStat
+              ? (keyword.initialPosition || 0) - (currentStat.averageRank || 0)
+              : 0;
+
+            return {
+              id: keyword.id,
+              keyword: keyword.keyword,
+              initialRank: keyword.initialPosition || 0,
+              monthlyData,
+              monthlyChange,
+              overallChange,
+              position: currentStat?.averageRank || 0,
+              searchVolume: currentStat?.searchVolume || 0,
+              topPageLink: (() => {
+                try {
+                  const url = currentStat?.topRankingPageUrl || '';
+                  return url ? decodeURIComponent(url) : '';
+                } catch (error) {
+                  console.error('Error decoding URL:', error);
+                  return currentStat?.topRankingPageUrl || '';
+                }
+              })(),
+            };
+          } catch (error) {
+            console.error('Error processing keyword:', keyword.keyword, error);
+            // Return a default structure for this keyword
+            return {
+              id: keyword.id,
+              keyword: keyword.keyword,
+              initialRank: keyword.initialPosition || 0,
+              monthlyData: {},
+              monthlyChange: 0,
+              overallChange: 0,
+              position: 0,
+              searchVolume: 0,
+              topPageLink: '',
+            };
+          }
+        });
+
+        // Get unique months for the table headers
+        const months = new Set<string>();
+        keywords.forEach((keyword) => {
+          Object.keys(keyword.monthlyData).forEach((month) => {
+            months.add(month);
+          });
+        });
+
+        const sortedMonths = Array.from(months).sort((a, b) => {
+          const [monthA, yearA] = a.split('/').map(Number);
+          const [monthB, yearB] = b.split('/').map(Number);
+          return yearA - yearB || monthA - monthB;
+        });
+
+        return {
+          keywords,
+          months: sortedMonths,
+        };
+      } catch (error) {
+        console.error('Error in getCampaignAnalytics:', error);
+        if (error instanceof TRPCError) {
+          throw error;
+        }
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to fetch campaign analytics: ${
+            error instanceof Error ? error.message : 'Unknown error'
+          }`,
         });
       }
     }),

@@ -64,3 +64,90 @@ enum CampaignStatus {
   ACTIVE
   PAUSED
 } 
+
+// Keyword analytics models for Page 1
+model SearchConsoleKeywordAnalytics {
+  id        String   @id @default(cuid())
+  siteUrl   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  keywords  SearchConsoleKeyword[]
+
+  @@index([siteUrl])
+}
+
+model SearchConsoleKeyword {
+  id              String   @id @default(cuid())
+  analyticsId     String
+  keyword         String
+  initialPosition Int
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  analytics   SearchConsoleKeywordAnalytics @relation(fields: [analyticsId], references: [id], onDelete: Cascade)
+  monthlyStats SearchConsoleKeywordMonthlyStat[]
+
+  @@index([keyword])
+  @@index([analyticsId, keyword])
+  @@unique([analyticsId, keyword])
+}
+
+model SearchConsoleKeywordMonthlyStat {
+  id                 String   @id @default(cuid())
+  keywordId          String
+  month              Int
+  year               Int
+  averageRank        Float
+  searchVolume       Int
+  topRankingPageUrl  String
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  keyword SearchConsoleKeyword @relation(fields: [keywordId], references: [id], onDelete: Cascade)
+
+  @@unique([keywordId, month, year])
+  @@index([month, year])
+}
+
+// Traffic analytics models for Pages 2 and 3
+model SearchConsoleTrafficAnalytics {
+  id        String   @id @default(cuid())
+  siteUrl   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  monthlyClicks SearchConsoleTrafficMonthlyClick[]
+  dailyClicks   SearchConsoleTrafficDailyClick[]
+
+  @@index([siteUrl])
+}
+
+model SearchConsoleTrafficMonthlyClick {
+  id          String   @id @default(cuid())
+  analyticsId String
+  month       Int
+  year        Int
+  totalClicks Int
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  analytics SearchConsoleTrafficAnalytics @relation(fields: [analyticsId], references: [id], onDelete: Cascade)
+
+  @@unique([analyticsId, month, year])
+  @@index([month, year])
+}
+
+model SearchConsoleTrafficDailyClick {
+  id          String   @id @default(cuid())
+  analyticsId String
+  date        DateTime
+  totalClicks Int
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  analytics SearchConsoleTrafficAnalytics @relation(fields: [analyticsId], references: [id], onDelete: Cascade)
+
+  @@unique([analyticsId, date])
+  @@index([date])
+}

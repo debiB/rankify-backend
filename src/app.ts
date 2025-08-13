@@ -9,6 +9,7 @@ import { createContext } from './trpc/context';
 import { initializeAdmin } from './utils/adminInit';
 import { verifySMTPConnection } from './utils/email';
 import oauthRoutes from './routes/oauth';
+import { CronService } from './services/cronService';
 
 // Load environment variables
 dotenv.config();
@@ -42,10 +43,14 @@ app.use('/auth', oauthRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
+  const cronService = CronService.getInstance();
+  const cronStatus = cronService.getCronStatus();
+
   res.json({
     status: 'OK',
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV,
+    cron: cronStatus,
   });
 });
 
@@ -95,6 +100,10 @@ const startServer = async () => {
       console.log(`🌍 Environment: ${process.env.NODE_ENV}`);
       console.log(`🔗 tRPC endpoint: http://localhost:${PORT}/trpc`);
     });
+
+    // Initialize cron jobs
+    const cronService = CronService.getInstance();
+    cronService.initCronJobs();
   } catch (error) {
     console.error('Failed to start server:', error);
     process.exit(1);
