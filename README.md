@@ -1,4 +1,4 @@
-# Rank Ranger Backend
+# RankifyTrack Backend
 
 Express.js server with TypeScript, tRPC, Prisma, and JWT authentication.
 

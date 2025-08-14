@@ -19,7 +19,7 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "Rank Ranger Backend API",
+  "description": "RankifyTrack Backend API",
   "dependencies": {
     "@prisma/client": "^6.13.0",
     "@trpc/client": "^11.4.4",
