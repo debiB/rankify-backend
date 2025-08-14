@@ -74,7 +74,7 @@ export const adminProcedure = t.procedure.use(
     if (!ctx.user) {
       throw new TRPCError({ code: 'UNAUTHORIZED' });
     }
-    if (ctx.user.role !== 'ADMIN') {
+    if (ctx.user.role !== 'ADMIN' || ctx.user.status !== 'ACTIVE') {
       throw new TRPCError({
         code: 'FORBIDDEN',
         message: 'Admin access required',

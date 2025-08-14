@@ -65,7 +65,7 @@ enum CampaignStatus {
   PAUSED
 } 
 
-// Keyword analytics models for Page 1
+// Keyword analytics models
 model SearchConsoleKeywordAnalytics {
   id        String   @id @default(cuid())
   siteUrl   String
@@ -110,25 +110,28 @@ model SearchConsoleKeywordMonthlyStat {
   @@index([month, year])
 }
 
-// Traffic analytics models for Pages 2 and 3
+// Traffic analytics models
 model SearchConsoleTrafficAnalytics {
   id        String   @id @default(cuid())
   siteUrl   String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  monthlyClicks SearchConsoleTrafficMonthlyClick[]
-  dailyClicks   SearchConsoleTrafficDailyClick[]
+  monthly SearchConsoleTrafficMonthly[]
+  daily   SearchConsoleTrafficDaily[]
 
   @@index([siteUrl])
 }
 
-model SearchConsoleTrafficMonthlyClick {
+model SearchConsoleTrafficMonthly {
   id          String   @id @default(cuid())
   analyticsId String
   month       Int
   year        Int
-  totalClicks Int
+  clicks      Int
+  impressions Int
+  ctr         Float
+  position    Float
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -138,11 +141,14 @@ model SearchConsoleTrafficMonthlyClick {
   @@index([month, year])
 }
 
-model SearchConsoleTrafficDailyClick {
+model SearchConsoleTrafficDaily {
   id          String   @id @default(cuid())
   analyticsId String
   date        DateTime
-  totalClicks Int
+  clicks      Int
+  impressions Int
+  ctr         Float
+  position    Float
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

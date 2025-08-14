@@ -15,33 +15,83 @@ export const adminRouter = router({
 
       console.log('Starting deletion of all search data...');
 
-      // 1. Delete all monthly stats first (they reference keywords)
-      const deletedMonthlyStats =
+      // 1. Delete all keyword monthly stats first (they reference keywords)
+      const deletedKeywordMonthlyStats =
         await prisma.searchConsoleKeywordMonthlyStat.deleteMany({});
-      console.log(`Deleted ${deletedMonthlyStats.count} monthly stats`);
+      console.log(
+        `Deleted ${deletedKeywordMonthlyStats.count} keyword monthly stats`
+      );
 
       // 2. Delete all keywords (they reference analytics)
       const deletedKeywords = await prisma.searchConsoleKeyword.deleteMany({});
       console.log(`Deleted ${deletedKeywords.count} keywords`);
 
-      // 3. Delete all analytics records
-      const deletedAnalytics =
+      // 3. Delete all keyword analytics records
+      const deletedKeywordAnalytics =
         await prisma.searchConsoleKeywordAnalytics.deleteMany({});
-      console.log(`Deleted ${deletedAnalytics.count} analytics records`);
+      console.log(
+        `Deleted ${deletedKeywordAnalytics.count} keyword analytics records`
+      );
+
+      // 4. Delete all traffic daily data first (they reference traffic analytics)
+      const deletedTrafficDaily =
+        await prisma.searchConsoleTrafficDaily.deleteMany({});
+      console.log(`Deleted ${deletedTrafficDaily.count} traffic daily records`);
+
+      // 5. Delete all traffic monthly data (they reference traffic analytics)
+      const deletedTrafficMonthly =
+        await prisma.searchConsoleTrafficMonthly.deleteMany({});
+      console.log(
+        `Deleted ${deletedTrafficMonthly.count} traffic monthly records`
+      );
+
+      // 6. Delete all traffic analytics records
+      const deletedTrafficAnalytics =
+        await prisma.searchConsoleTrafficAnalytics.deleteMany({});
+      console.log(
+        `Deleted ${deletedTrafficAnalytics.count} traffic analytics records`
+      );
+
+      // 7. Clean up export files
+      let deletedExportFiles = 0;
+      try {
+        const exportDir = path.join(process.cwd(), 'exports');
+        if (fs.existsSync(exportDir)) {
+          const files = fs.readdirSync(exportDir);
+          for (const file of files) {
+            if (file.endsWith('.json')) {
+              fs.unlinkSync(path.join(exportDir, file));
+              deletedExportFiles++;
+            }
+          }
+          console.log(`Deleted ${deletedExportFiles} export files`);
+        }
+      } catch (error) {
+        console.warn('Warning: Could not clean up export files:', error);
+      }
 
       const totalDeleted =
-        deletedMonthlyStats.count +
+        deletedKeywordMonthlyStats.count +
         deletedKeywords.count +
-        deletedAnalytics.count;
+        deletedKeywordAnalytics.count +
+        deletedTrafficDaily.count +
+        deletedTrafficMonthly.count +
+        deletedTrafficAnalytics.count;
 
-      console.log(`Successfully deleted ${totalDeleted} total records`);
+      console.log(
+        `Successfully deleted ${totalDeleted} total records and ${deletedExportFiles} export files`
+      );
 
       return {
         success: true,
         deletedRecords: {
-          monthlyStats: deletedMonthlyStats.count,
+          keywordMonthlyStats: deletedKeywordMonthlyStats.count,
           keywords: deletedKeywords.count,
-          analytics: deletedAnalytics.count,
+          keywordAnalytics: deletedKeywordAnalytics.count,
+          trafficDaily: deletedTrafficDaily.count,
+          trafficMonthly: deletedTrafficMonthly.count,
+          trafficAnalytics: deletedTrafficAnalytics.count,
+          exportFiles: deletedExportFiles,
           total: totalDeleted,
         },
       };
@@ -166,10 +216,10 @@ export const adminRouter = router({
       console.log('Admin triggered monthly analytics job...');
       const cronService = CronService.getInstance();
       await cronService.triggerMonthlyAnalytics();
-      
-      return { 
-        success: true, 
-        message: 'Monthly analytics job triggered successfully' 
+
+      return {
+        success: true,
+        message: 'Monthly analytics job triggered successfully',
       };
     } catch (error) {
       console.error('Error triggering monthly analytics job:', error);

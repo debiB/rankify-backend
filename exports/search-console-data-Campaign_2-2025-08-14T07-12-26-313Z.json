@@ -1,0 +1,111 @@
+{
+  "exportDate": "2025-08-14T07:12:26.317Z",
+  "campaign": {
+    "id": "cmea8g2v30002o5s0ab5ljywr",
+    "name": "Campaign 2",
+    "searchConsoleSite": "sc-domain:rankify.co.il",
+    "startingDate": "2025-05-12T00:00:00.000Z"
+  },
+  "dataSummary": {
+    "totalKeywords": 3,
+    "totalTopRankingPages": 3,
+    "totalPositionData": 2,
+    "totalInitialPositions": 1,
+    "totalMonthlyRecords": 3
+  },
+  "keywordsData": {
+    "topRankingPages": {
+      "rankify": {
+        "page": "https://rankify.co.il/",
+        "impressions": 56
+      },
+      "מה זה aeo": {
+        "page": "https://rankify.co.il/%D7%9E%D7%93%D7%A8%D7%99%D7%9B%D7%99%D7%9D/%D7%9E%D7%94-%D7%96%D7%94-aeo-%D7%94%D7%9E%D7%93%D7%A8%D7%99%D7%9A-%D7%94%D7%9E%D7%9C%D7%90/",
+        "impressions": 101
+      },
+      "נאור שוען": {
+        "page": "https://rankify.co.il/episode/%D7%90%D7%A1%D7%98%D7%A8%D7%98%D7%92%D7%99%D7%95%D7%AA-%D7%A9%D7%A2%D7%95%D7%A9%D7%95%D7%AA-%D7%9E%D7%99%D7%9C%D7%99%D7%95%D7%A0%D7%99%D7%9D/",
+        "impressions": 33
+      }
+    },
+    "keywordsAnalytics": {
+      "rankify": {
+        "clicks": 36,
+        "impressions": 57,
+        "ctr": 0.631578947368421,
+        "position": 1.368421052631579
+      },
+      "מה זה aeo": {
+        "clicks": 4,
+        "impressions": 105,
+        "ctr": 0.0380952380952381,
+        "position": 12.99047619047619
+      },
+      "נאור שוען": {
+        "clicks": 3,
+        "impressions": 33,
+        "ctr": 0.09090909090909091,
+        "position": 9.393939393939394
+      }
+    },
+    "keywordsPositions": {
+      "מה זה aeo": {
+        "clicks": 1,
+        "impressions": 6,
+        "ctr": 0.16666666666666666,
+        "position": 6.666666666666667
+      },
+      "נאור שוען": {
+        "clicks": 1,
+        "impressions": 4,
+        "ctr": 0.25,
+        "position": 8.25
+      }
+    },
+    "keywordsInitialPositions": {
+      "rankify": {
+        "clicks": 1,
+        "impressions": 1,
+        "ctr": 1,
+        "position": 1
+      }
+    }
+  },
+  "monthlyBreakdown": {
+    "rankify": {
+      "initialPosition": 1,
+      "monthlyStats": []
+    },
+    "מה זה aeo": {
+      "initialPosition": 0,
+      "monthlyStats": [
+        {
+          "month": 6,
+          "year": 2025,
+          "averageRank": 43,
+          "searchVolume": 34,
+          "topRankingPageUrl": "https://rankify.co.il/מדריכים/צקליסט-aeo-המדריך-המלא/"
+        },
+        {
+          "month": 7,
+          "year": 2025,
+          "averageRank": 6.666666666666667,
+          "searchVolume": 105,
+          "topRankingPageUrl": "https://rankify.co.il/מדריכים/מה-זה-aeo-המדריך-המלא/"
+        }
+      ]
+    },
+    "נאור שוען": {
+      "initialPosition": 0,
+      "monthlyStats": [
+        {
+          "month": 7,
+          "year": 2025,
+          "averageRank": 8.25,
+          "searchVolume": 33,
+          "topRankingPageUrl": "https://rankify.co.il/episode/אסטרטגיות-שעושות-מיליונים/"
+        }
+      ]
+    }
+  }
+}

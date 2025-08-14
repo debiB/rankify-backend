@@ -6,6 +6,19 @@ import { searchConsoleService } from './searchConsole';
 import * as fs from 'fs';
 import * as path from 'path';
 
+// Debug logging function
+const debugLog = (message: string) => {
+  const timestamp = moment().format('YYYY-MM-DD HH:mm:ss');
+  const logMessage = `[${timestamp}] ${message}\n`;
+  const logFile = path.join(__dirname, '../../debug-analytics.log');
+
+  try {
+    fs.appendFileSync(logFile, logMessage);
+  } catch (error) {
+    console.error('Failed to write to debug log:', error);
+  }
+};
+
 const DAY_TO_FETCH_MONTHLY_POSITION = 28;
 
 export class AnalyticsService {
@@ -44,6 +57,16 @@ export class AnalyticsService {
       const saved = await this.saveKeywordsData(keywordsData, campaign);
       if (!saved) {
         return false;
+      }
+
+      // Fetch and save traffic data
+      const trafficData = await this.fetchTrafficData({
+        campaign,
+        googleAccount,
+        waitForAllData,
+      });
+      if (trafficData) {
+        await this.saveTrafficData(trafficData, campaign);
       }
 
       // Save JSON file with all fetched data
@@ -114,7 +137,22 @@ export class AnalyticsService {
             .startOf('month')
         : startingDate;
 
-      const monthsCount = moment().diff(fetchStartDate, 'months');
+      // Calculate months to fetch, excluding the current month due to 3-day delay
+      const currentDate = moment();
+      const endDate = currentDate.clone().subtract(1, 'month').endOf('month');
+      const monthsCount = endDate.diff(fetchStartDate, 'months');
+
+      // Ensure we don't fetch the current month
+      const finalMonthsCount = Math.max(0, monthsCount);
+
+      debugLog('=== DEBUG: Month Fetching Logic ===');
+      debugLog('Current date: ' + currentDate.format('YYYY-MM-DD'));
+      debugLog('Fetch start date: ' + fetchStartDate.format('YYYY-MM-DD'));
+      debugLog('End date (previous month): ' + endDate.format('YYYY-MM-DD'));
+      debugLog('Months count: ' + monthsCount);
+      debugLog('Final months count: ' + finalMonthsCount);
+      debugLog('Last data month: ' + JSON.stringify(lastDataMonth));
+      debugLog('=====================================');
 
       // Load existing data from database
       if (existingAnalytics && lastDataMonth) {
@@ -131,16 +169,29 @@ export class AnalyticsService {
       }
 
       // Fetch new data only from the last data month onwards
-      for (let i = 0; i <= monthsCount; i++) {
+      debugLog('=== DEBUG: Starting month loop ===');
+      debugLog('Loop will run from i=0 to i=' + finalMonthsCount);
+
+      for (let i = 0; i <= finalMonthsCount; i++) {
         let startAt = fetchStartDate.clone().add(i, 'months');
         let endAt = startAt.clone().endOf('month');
 
+        debugLog(
+          `Loop iteration ${i}: Processing ${startAt.format(
+            'YYYY-MM'
+          )} (${startAt.format('YYYY-MM-DD')} to ${endAt.format('YYYY-MM-DD')})`
+        );
+
         // Skip if this month is not over yet
         if (endAt.isAfter(moment())) {
+          debugLog(
+            `Skipping ${startAt.format('YYYY-MM')} - month not over yet`
+          );
           continue;
         }
 
         // Fetch data for this specific month
+        debugLog(`Calling fetchMonthData for ${startAt.format('YYYY-MM')}`);
         const monthData = await this.fetchMonthData({
           campaign,
           googleAccount,
@@ -216,6 +267,20 @@ export class AnalyticsService {
     keywords: string[];
   }) {
     try {
+      // Don't fetch data for the current month due to 3-day delay in Google Search Console
+      const currentDate = moment();
+      const isCurrentMonth =
+        startAt.month() === currentDate.month() &&
+        startAt.year() === currentDate.year();
+
+      if (isCurrentMonth) {
+        debugLog(
+          `Skipping fetch for current month ${startAt.format(
+            'YYYY-MM'
+          )} - waiting for next month due to 3-day data delay`
+        );
+        return null;
+      }
       // Fetch top ranking pages for this month
       const topRankingPages = await this.fetchKeywordsTopRankingPages({
         campaign,
@@ -272,6 +337,11 @@ export class AnalyticsService {
     monthDate: moment.Moment
   ) {
     try {
+      debugLog(
+        `saveMonthData called for ${monthDate.format('YYYY-MM')} - campaign: ${
+          campaign.name
+        }`
+      );
       const siteUrl = campaign.searchConsoleSite;
       const month = monthDate.month() + 1; // moment months are 0-indexed
       const year = monthDate.year();
@@ -563,6 +633,10 @@ export class AnalyticsService {
         endAt: date,
         dimensions: ['query'],
       });
+
+      console.log('--------------------------------');
+      console.log(date.format('YYYY-MM-DD'));
+      console.log(data);
 
       const filteredData = data?.filter(({ keys }) =>
         keywords.includes(keys?.[0] as string)
@@ -939,54 +1013,317 @@ export class AnalyticsService {
           },
         });
 
-        // Process monthly stats if we have position data
-        if (keywordsData.keywordsPositions[trimmedKeyword]) {
-          const positionData = keywordsData.keywordsPositions[trimmedKeyword];
-          const currentMonth = moment().month() + 1; // moment months are 0-indexed
-          const currentYear = moment().year();
-
-          // Get top ranking page from topRankingPages and decode it
-          const rawTopRankingPage =
-            keywordsData.topRankingPages[trimmedKeyword]?.page || '';
-          const topRankingPage = rawTopRankingPage
-            ? decodeURIComponent(rawTopRankingPage)
-            : '';
-
-          // Get search volume from keywordsAnalytics
-          const analyticsData = keywordsData.keywordsAnalytics[trimmedKeyword];
-          const searchVolume = analyticsData?.impressions || 0;
-
-          // Create or update monthly stat
-          await prisma.searchConsoleKeywordMonthlyStat.upsert({
-            where: {
-              keywordId_month_year: {
-                keywordId: keywordRecord.id,
-                month: currentMonth,
-                year: currentYear,
-              },
-            },
-            update: {
-              averageRank: positionData.position || 0,
-              searchVolume,
-              topRankingPageUrl: topRankingPage,
-              updatedAt: new Date(),
-            },
-            create: {
-              keywordId: keywordRecord.id,
-              month: currentMonth,
-              year: currentYear,
-              averageRank: positionData.position || 0,
-              searchVolume,
-              topRankingPageUrl: topRankingPage,
-            },
-          });
-        }
+        // Note: Monthly stats are now handled by saveMonthData method
+        // This method only creates/updates keyword records and initial positions
       }
 
       return true;
     } catch (error) {
       console.error('Error saving keywords data:', error);
       return false;
+    }
+  }
+
+  private async fetchTrafficData({
+    campaign,
+    googleAccount,
+    waitForAllData,
+  }: {
+    campaign: Campaign;
+    googleAccount: GoogleAccount;
+    waitForAllData: boolean;
+  }): Promise<{
+    monthly: Record<
+      string,
+      { clicks: number; impressions: number; ctr: number; position: number }
+    >;
+    daily: Record<
+      string,
+      { clicks: number; impressions: number; ctr: number; position: number }
+    >;
+  } | null> {
+    try {
+      // Calculate the last 12 complete months (excluding current month)
+      const currentDate = moment();
+      const startDate = currentDate
+        .clone()
+        .subtract(12, 'months')
+        .startOf('month');
+      const endDate = currentDate.clone().subtract(1, 'month').endOf('month');
+
+      const monthlyData: Record<
+        string,
+        { clicks: number; impressions: number; ctr: number; position: number }
+      > = {};
+      const dailyData: Record<
+        string,
+        { clicks: number; impressions: number; ctr: number; position: number }
+      > = {};
+
+      // Fetch monthly traffic data for the last 12 months
+      for (let i = 0; i < 12; i++) {
+        const startAt = startDate.clone().add(i, 'months');
+        const endAt = startAt.clone().endOf('month');
+
+        // Skip if this month is not over yet
+        if (endAt.isAfter(moment())) {
+          continue;
+        }
+
+        const monthKey = `${startAt.format('YYYY-MM')}`;
+        const monthTraffic = await this.fetchMonthlyTrafficData({
+          campaign,
+          googleAccount,
+          startAt,
+          endAt,
+          waitForAllData,
+        });
+
+        if (monthTraffic) {
+          monthlyData[monthKey] = monthTraffic;
+        }
+      }
+
+      // Fetch daily traffic data for the current month (from first day to end of month)
+      const dailyStartDate = moment().startOf('month').startOf('day');
+      const dailyEndDate = moment().endOf('month').endOf('day');
+
+      const dailyTraffic = await this.fetchDailyTrafficData({
+        campaign,
+        googleAccount,
+        startAt: dailyStartDate,
+        endAt: dailyEndDate,
+        waitForAllData,
+      });
+
+      if (dailyTraffic) {
+        Object.assign(dailyData, dailyTraffic);
+      }
+
+      return {
+        monthly: monthlyData,
+        daily: dailyData,
+      };
+    } catch (error) {
+      console.error('Error fetching traffic data:', error);
+      return null;
+    }
+  }
+
+  private async fetchMonthlyTrafficData({
+    campaign,
+    googleAccount,
+    startAt,
+    endAt,
+    waitForAllData,
+  }: {
+    campaign: Campaign;
+    googleAccount: GoogleAccount;
+    startAt: moment.Moment;
+    endAt: moment.Moment;
+    waitForAllData: boolean;
+  }): Promise<{
+    clicks: number;
+    impressions: number;
+    ctr: number;
+    position: number;
+  } | null> {
+    try {
+      const analytics = await searchConsoleService.getAnalytics({
+        campaign,
+        googleAccount,
+        waitForAllData,
+        startAt,
+        endAt,
+        dimensions: [], // No dimensions for overall site traffic
+      });
+
+      if (!analytics || analytics.length === 0) {
+        return null;
+      }
+
+      // Sum up all the data for the month
+      const totalClicks = analytics.reduce(
+        (sum, row) => sum + (row.clicks || 0),
+        0
+      );
+      const totalImpressions = analytics.reduce(
+        (sum, row) => sum + (row.impressions || 0),
+        0
+      );
+      const totalPosition = analytics.reduce(
+        (sum, row) => sum + (row.position || 0),
+        0
+      );
+
+      // Calculate CTR (Click-Through Rate)
+      const ctr =
+        totalImpressions > 0 ? (totalClicks / totalImpressions) * 100 : 0;
+
+      // Calculate average position
+      const avgPosition =
+        analytics.length > 0 ? totalPosition / analytics.length : 0;
+
+      return {
+        clicks: totalClicks,
+        impressions: totalImpressions,
+        ctr: parseFloat(ctr.toFixed(2)),
+        position: parseFloat(avgPosition.toFixed(2)),
+      };
+    } catch (error) {
+      console.error('Error fetching monthly traffic data:', error);
+      return null;
+    }
+  }
+
+  private async fetchDailyTrafficData({
+    campaign,
+    googleAccount,
+    startAt,
+    endAt,
+    waitForAllData,
+  }: {
+    campaign: Campaign;
+    googleAccount: GoogleAccount;
+    startAt: moment.Moment;
+    endAt: moment.Moment;
+    waitForAllData: boolean;
+  }): Promise<Record<
+    string,
+    { clicks: number; impressions: number; ctr: number; position: number }
+  > | null> {
+    try {
+      const analytics = await searchConsoleService.getAnalytics({
+        campaign,
+        googleAccount,
+        waitForAllData,
+        startAt,
+        endAt,
+        dimensions: ['date'], // Include date dimension for daily breakdown
+      });
+
+      if (!analytics || analytics.length === 0) {
+        return null;
+      }
+
+      const dailyData: Record<
+        string,
+        { clicks: number; impressions: number; ctr: number; position: number }
+      > = {};
+
+      analytics.forEach((row) => {
+        const dateKey = row.keys?.[0] as string;
+        if (dateKey) {
+          const clicks = row.clicks || 0;
+          const impressions = row.impressions || 0;
+          const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
+
+          dailyData[dateKey] = {
+            clicks,
+            impressions,
+            ctr: parseFloat(ctr.toFixed(2)),
+            position: parseFloat((row.position || 0).toFixed(2)),
+          };
+        }
+      });
+
+      return dailyData;
+    } catch (error) {
+      console.error('Error fetching daily traffic data:', error);
+      return null;
+    }
+  }
+
+  private async saveTrafficData(
+    trafficData: {
+      monthly: Record<
+        string,
+        { clicks: number; impressions: number; ctr: number; position: number }
+      >;
+      daily: Record<
+        string,
+        { clicks: number; impressions: number; ctr: number; position: number }
+      >;
+    },
+    campaign: Campaign
+  ): Promise<void> {
+    try {
+      const siteUrl = campaign.searchConsoleSite;
+
+      // Find existing traffic analytics record or create a new one
+      let analytics = await prisma.searchConsoleTrafficAnalytics.findFirst({
+        where: { siteUrl },
+      });
+
+      if (!analytics) {
+        analytics = await prisma.searchConsoleTrafficAnalytics.create({
+          data: { siteUrl },
+        });
+      }
+
+      // Save monthly traffic data
+      for (const [monthKey, data] of Object.entries(trafficData.monthly)) {
+        const [year, month] = monthKey.split('-').map(Number);
+
+        await prisma.searchConsoleTrafficMonthly.upsert({
+          where: {
+            analyticsId_month_year: {
+              analyticsId: analytics.id,
+              month,
+              year,
+            },
+          },
+          update: {
+            clicks: data.clicks,
+            impressions: data.impressions,
+            ctr: data.ctr,
+            position: data.position,
+            updatedAt: new Date(),
+          },
+          create: {
+            analyticsId: analytics.id,
+            month,
+            year,
+            clicks: data.clicks,
+            impressions: data.impressions,
+            ctr: data.ctr,
+            position: data.position,
+          },
+        });
+      }
+
+      // Save daily traffic data
+      for (const [dateKey, data] of Object.entries(trafficData.daily)) {
+        const date = moment(dateKey).toDate();
+
+        await prisma.searchConsoleTrafficDaily.upsert({
+          where: {
+            analyticsId_date: {
+              analyticsId: analytics.id,
+              date,
+            },
+          },
+          update: {
+            clicks: data.clicks,
+            impressions: data.impressions,
+            ctr: data.ctr,
+            position: data.position,
+            updatedAt: new Date(),
+          },
+          create: {
+            analyticsId: analytics.id,
+            date,
+            clicks: data.clicks,
+            impressions: data.impressions,
+            ctr: data.ctr,
+            position: data.position,
+          },
+        });
+      }
+
+      console.log(`Successfully saved traffic data for site: ${siteUrl}`);
+    } catch (error) {
+      console.error('Error saving traffic data:', error);
     }
   }
 
