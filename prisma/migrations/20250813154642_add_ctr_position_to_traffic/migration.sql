@@ -8,7 +8,7 @@
 
 */
 -- AlterTable
-ALTER TABLE `searchconsoletrafficdaily` ADD COLUMN `ctr` DOUBLE NOT NULL,
+ALTER TABLE `SearchConsoleTrafficDaily` ADD COLUMN `ctr` DOUBLE NOT NULL,
     ADD COLUMN `position` DOUBLE NOT NULL;
 
 -- AlterTable

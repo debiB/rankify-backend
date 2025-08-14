@@ -1,18 +1,18 @@
 /*
   Warnings:
 
-  - You are about to drop the `searchconsoletrafficdailyclick` table. If the table is not empty, all the data it contains will be lost.
+  - You are about to drop the `SearchConsoleTrafficDailyClick` table. If the table is not empty, all the data it contains will be lost.
   - You are about to drop the `searchconsoletrafficmonthlyclick` table. If the table is not empty, all the data it contains will be lost.
 
 */
 -- DropForeignKey
-ALTER TABLE `searchconsoletrafficdailyclick` DROP FOREIGN KEY `SearchConsoleTrafficDailyClick_analyticsId_fkey`;
+ALTER TABLE `SearchConsoleTrafficDailyClick` DROP FOREIGN KEY `SearchConsoleTrafficDailyClick_analyticsId_fkey`;
 
 -- DropForeignKey
 ALTER TABLE `searchconsoletrafficmonthlyclick` DROP FOREIGN KEY `SearchConsoleTrafficMonthlyClick_analyticsId_fkey`;
 
 -- DropTable
-DROP TABLE `searchconsoletrafficdailyclick`;
+DROP TABLE `SearchConsoleTrafficDailyClick`;
 
 -- DropTable
 DROP TABLE `searchconsoletrafficmonthlyclick`;
