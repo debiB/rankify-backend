@@ -101,7 +101,7 @@ export class CronService {
           try {
             const success = await analyticsService.fetchAndSaveAnalytics({
               campaignId: campaign.id,
-              waitForAllData: false, // Run in background
+              waitForAllData: true, // Run in background
             });
 
             if (success) {
@@ -209,10 +209,10 @@ export class CronService {
               };
             }
 
-            // Fetch and save daily traffic data
-            const success = await analyticsService.fetchAndSaveAnalytics({
+            // Fetch and save daily data (keyword positions and traffic)
+            const success = await analyticsService.fetchAndSaveDailyData({
               campaignId: campaign.id,
-              waitForAllData: false, // Run in background
+              waitForAllData: true, // Run in background
             });
 
             if (success) {

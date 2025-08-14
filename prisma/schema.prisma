@@ -87,6 +87,7 @@ model SearchConsoleKeyword {
 
   analytics   SearchConsoleKeywordAnalytics @relation(fields: [analyticsId], references: [id], onDelete: Cascade)
   monthlyStats SearchConsoleKeywordMonthlyStat[]
+  dailyStats   SearchConsoleKeywordDailyStat[]
 
   @@index([keyword])
   @@index([analyticsId, keyword])
@@ -108,6 +109,22 @@ model SearchConsoleKeywordMonthlyStat {
 
   @@unique([keywordId, month, year])
   @@index([month, year])
+}
+
+model SearchConsoleKeywordDailyStat {
+  id                 String   @id @default(cuid())
+  keywordId          String
+  date               DateTime
+  averageRank        Float
+  searchVolume       Int
+  topRankingPageUrl  String
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  keyword SearchConsoleKeyword @relation(fields: [keywordId], references: [id], onDelete: Cascade)
+
+  @@unique([keywordId, date])
+  @@index([date])
 }
 
 // Traffic analytics models

@@ -83,6 +83,12 @@ async function handleKeywordChanges(
         campaignId: newCampaign.id,
         waitForAllData: false,
       });
+
+      // Also fetch historical daily data for the new keywords
+      analyticsService.fetchAndSaveHistoricalDailyData({
+        campaignId: newCampaign.id,
+        waitForAllData: false,
+      });
     }
   } catch (error) {
     console.error('Error handling keyword changes:', error);
@@ -180,6 +186,12 @@ export const campaignsRouter = router({
 
         // Fetch the analytics (without waiting)
         analyticsService.fetchAndSaveAnalytics({
+          campaignId: campaign.id,
+          waitForAllData: false,
+        });
+
+        // Also fetch historical daily data (without waiting)
+        analyticsService.fetchAndSaveHistoricalDailyData({
           campaignId: campaign.id,
           waitForAllData: false,
         });
@@ -380,6 +392,12 @@ export const campaignsRouter = router({
         // Trigger analytics fetch if starting date changed
         if (isStartingDateChanged) {
           analyticsService.fetchAndSaveAnalytics({
+            campaignId: campaign.id,
+            waitForAllData: false,
+          });
+
+          // Also fetch historical daily data
+          analyticsService.fetchAndSaveHistoricalDailyData({
             campaignId: campaign.id,
             waitForAllData: false,
           });
@@ -1083,4 +1101,240 @@ export const campaignsRouter = router({
       });
     }
   }),
+
+  // Get campaign performance metrics (weekly and monthly changes)
+  getCampaignPerformanceMetrics: adminProcedure
+    .input(
+      z.object({
+        campaignIds: z.array(z.string()).optional(),
+      })
+    )
+    .query(async ({ input }) => {
+      try {
+        const { campaignIds } = input;
+
+        // Build where clause for campaigns
+        const campaignWhere: any = {};
+        if (campaignIds && campaignIds.length > 0) {
+          campaignWhere.id = { in: campaignIds };
+        }
+
+        // Get all campaigns
+        const campaigns = await prisma.campaign.findMany({
+          where: campaignWhere,
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+              },
+            },
+            googleAccount: {
+              select: {
+                id: true,
+                accountName: true,
+                email: true,
+              },
+            },
+          },
+        });
+
+        const performanceMetrics = [];
+
+        for (const campaign of campaigns) {
+          // Get analytics data for this campaign
+          const analytics =
+            await prisma.searchConsoleKeywordAnalytics.findFirst({
+              where: { siteUrl: campaign.searchConsoleSite },
+              include: {
+                keywords: {
+                  include: {
+                    monthlyStats: {
+                      orderBy: [{ year: 'asc' }, { month: 'asc' }],
+                    },
+                    dailyStats: {
+                      orderBy: { date: 'asc' },
+                    },
+                  },
+                },
+              },
+            });
+
+          if (!analytics || analytics.keywords.length === 0) {
+            performanceMetrics.push({
+              campaignId: campaign.id,
+              campaignName: campaign.name,
+              searchConsoleSite: campaign.searchConsoleSite,
+              weeklyChange: { up: 0, neutral: 0, down: 0 },
+              weeklyPercentage: 0,
+              monthlyChange: { up: 0, neutral: 0, down: 0 },
+              monthlyPercentage: 0,
+              overallPerformance: { google: 0, mobile: 0 },
+            });
+            continue;
+          }
+
+          // Calculate current and previous month/year for monthly changes
+          const currentDate = new Date();
+          const currentMonth = currentDate.getMonth() + 1;
+          const currentYear = currentDate.getFullYear();
+
+          // Previous month
+          let prevMonth = currentMonth - 1;
+          let prevYear = currentYear;
+          if (prevMonth === 0) {
+            prevMonth = 12;
+            prevYear--;
+          }
+
+          // Calculate weekly changes using daily data
+          const oneWeekAgo = new Date(currentDate);
+          oneWeekAgo.setDate(currentDate.getDate() - 7);
+          const twoWeeksAgo = new Date(currentDate);
+          twoWeeksAgo.setDate(currentDate.getDate() - 14);
+
+          let weeklyUp = 0;
+          let weeklyNeutral = 0;
+          let weeklyDown = 0;
+          let monthlyUp = 0;
+          let monthlyNeutral = 0;
+          let monthlyDown = 0;
+          let totalKeywords = 0;
+
+          // Calculate changes for each keyword
+          for (const keyword of analytics.keywords) {
+            const currentMonthStat = keyword.monthlyStats.find(
+              (stat) => stat.month === currentMonth && stat.year === currentYear
+            );
+            const prevMonthStat = keyword.monthlyStats.find(
+              (stat) => stat.month === prevMonth && stat.year === prevYear
+            );
+
+            // Get daily stats for weekly calculation
+            const currentWeekStats = keyword.dailyStats.filter(
+              (stat) => new Date(stat.date) >= oneWeekAgo
+            );
+            const previousWeekStats = keyword.dailyStats.filter((stat) => {
+              const statDate = new Date(stat.date);
+              return statDate >= twoWeeksAgo && statDate < oneWeekAgo;
+            });
+
+            // Calculate monthly change using only monthly data - compare 2 last available months
+            let hasMonthlyData = false;
+            if (keyword.monthlyStats.length >= 2) {
+              // Get the 2 most recent months
+              const sortedMonthlyStats = keyword.monthlyStats
+                .sort((a, b) => {
+                  if (a.year !== b.year) return b.year - a.year;
+                  return b.month - a.month;
+                })
+                .slice(0, 2);
+
+              const mostRecentMonth = sortedMonthlyStats[0];
+              const secondMostRecentMonth = sortedMonthlyStats[1];
+
+              hasMonthlyData = true;
+              totalKeywords++;
+              const monthlyChange = Math.floor(
+                secondMostRecentMonth.averageRank - mostRecentMonth.averageRank
+              );
+
+              if (monthlyChange > 0) {
+                monthlyUp++; // Improved position (lower number is better)
+              } else if (monthlyChange < 0) {
+                monthlyDown++; // Worse position (higher number is worse)
+              } else {
+                monthlyNeutral++; // No change
+              }
+            }
+
+            // Calculate weekly change using daily data ONLY
+            if (currentWeekStats.length > 0 && previousWeekStats.length > 0) {
+              // Only count for weekly if we have daily data (regardless of monthly data)
+              if (!hasMonthlyData) {
+                totalKeywords++; // Count for weekly calculation even if no monthly data
+              }
+
+              // Calculate average rank for current week
+              const currentWeekAvg =
+                currentWeekStats.reduce(
+                  (sum, stat) => sum + stat.averageRank,
+                  0
+                ) / currentWeekStats.length;
+
+              // Calculate average rank for previous week
+              const previousWeekAvg =
+                previousWeekStats.reduce(
+                  (sum, stat) => sum + stat.averageRank,
+                  0
+                ) / previousWeekStats.length;
+
+              const weeklyChange = Math.floor(previousWeekAvg - currentWeekAvg);
+
+              if (weeklyChange > 0) {
+                weeklyUp++; // Improved position
+              } else if (weeklyChange < 0) {
+                weeklyDown++; // Worse position
+              } else {
+                weeklyNeutral++; // No change
+              }
+            }
+          }
+
+          // Calculate percentages
+          const weeklyPercentage =
+            totalKeywords > 0
+              ? Math.floor((weeklyUp / totalKeywords) * 100)
+              : 0;
+          const monthlyPercentage =
+            totalKeywords > 0
+              ? Math.floor((monthlyUp / totalKeywords) * 100)
+              : 0;
+
+          // Calculate overall performance (using current month data)
+          let overallGoogle = 0;
+          let overallMobile = 0;
+
+          if (totalKeywords > 0) {
+            // For now, we'll use the same percentage for both Google and Mobile
+            // In a real implementation, you might have separate mobile data
+            overallGoogle = monthlyPercentage;
+            overallMobile = monthlyPercentage;
+          }
+
+          performanceMetrics.push({
+            campaignId: campaign.id,
+            campaignName: campaign.name,
+            searchConsoleSite: campaign.searchConsoleSite,
+            weeklyChange: {
+              up: weeklyUp,
+              neutral: weeklyNeutral,
+              down: weeklyDown,
+            },
+            weeklyPercentage,
+            monthlyChange: {
+              up: monthlyUp,
+              neutral: monthlyNeutral,
+              down: monthlyDown,
+            },
+            monthlyPercentage,
+            overallPerformance: {
+              google: overallGoogle,
+              mobile: overallMobile,
+            },
+          });
+        }
+
+        return performanceMetrics;
+      } catch (error) {
+        console.error('Error in getCampaignPerformanceMetrics:', error);
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to fetch campaign performance metrics: ${
+            error instanceof Error ? error.message : 'Unknown error'
+          }`,
+        });
+      }
+    }),
 });
