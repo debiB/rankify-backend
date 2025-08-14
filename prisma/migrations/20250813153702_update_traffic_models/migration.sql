@@ -6,10 +6,10 @@
 
 */
 -- DropForeignKey
-ALTER TABLE `SearchConsoleTrafficDailyClick` DROP FOREIGN KEY `SearchConsoleTrafficDailyClick_analyticsId_fkey`;
+-- ALTER TABLE `SearchConsoleTrafficDailyClick` DROP FOREIGN KEY `SearchConsoleTrafficDailyClick_analyticsId_fkey`;
 
 -- DropForeignKey
-ALTER TABLE `SearchConsoleTrafficMonthlyClick` DROP FOREIGN KEY `SearchConsoleTrafficMonthlyClick_analyticsId_fkey`;
+-- ALTER TABLE `SearchConsoleTrafficMonthlyClick` DROP FOREIGN KEY `SearchConsoleTrafficMonthlyClick_analyticsId_fkey`;
 
 -- DropTable
 DROP TABLE `SearchConsoleTrafficDailyClick`;
