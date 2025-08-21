@@ -877,12 +877,10 @@ export const campaignsRouter = router({
               });
 
               if (initialPositionStats.length > 0) {
-                console.log('initialPositionStats', initialPositionStats);
                 // Calculate weighted average position for initial rank
                 const aggregated = aggregateDailyStats(initialPositionStats, 7);
                 if (aggregated) {
                   initialRank = aggregated.averagePosition;
-                  console.log('initialRank', initialRank);
                 }
               }
             }
