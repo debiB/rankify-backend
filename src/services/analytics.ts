@@ -1,77 +1,18 @@
-import { prisma } from '../utils/prisma';
+import { PrismaClient } from '@prisma/client';
+import moment from 'moment';
 import { Campaign, GoogleAccount } from '@prisma/client';
-import moment from 'moment-timezone';
+import { SearchConsoleService } from './searchConsole';
 import { webmasters_v3 } from 'googleapis';
-import { searchConsoleService } from './searchConsole';
 
-import * as path from 'path';
+const prisma = new PrismaClient();
+const searchConsoleService = new SearchConsoleService();
 
-// Debug logging function
 const debugLog = (message: string) => {
-  const timestamp = moment().format('YYYY-MM-DD HH:mm:ss');
+  const timestamp = new Date().toISOString();
   console.log(`[${timestamp}] ${message}`);
 };
 
-const DAY_TO_FETCH_MONTHLY_POSITION = 28;
-
 export class AnalyticsService {
-  async fetchAndSaveAnalytics({
-    campaignId,
-    waitForAllData,
-  }: {
-    campaignId: string;
-    waitForAllData: boolean;
-  }): Promise<boolean> {
-    try {
-      const campaign = await prisma.campaign.findUnique({
-        where: { id: campaignId },
-      });
-
-      if (!campaign) {
-        throw new Error('Campaign not found');
-      }
-
-      const googleAccount = await prisma.googleAccount.findUnique({
-        where: { id: campaign.googleAccountId },
-      });
-      if (!googleAccount) {
-        throw new Error('Google account not found');
-      }
-
-      const keywordsData = await this.fetchKeywordsData({
-        campaign,
-        googleAccount,
-        waitForAllData,
-      });
-      if (!keywordsData) {
-        return false;
-      }
-
-      const saved = await this.saveKeywordsData(keywordsData, campaign);
-      if (!saved) {
-        return false;
-      }
-
-      // Fetch and save traffic data
-      const trafficData = await this.fetchTrafficData({
-        campaign,
-        googleAccount,
-        waitForAllData,
-      });
-      if (trafficData) {
-        await this.saveTrafficData(trafficData, campaign);
-      }
-
-      // Log data summary
-      await this.logSearchConsoleDataSummary(keywordsData, campaign);
-
-      return true;
-    } catch (error) {
-      console.error('Error fetching and saving analytics:', error);
-      return false;
-    }
-  }
-
   /**
    * Fetch and save daily keyword positions and traffic data
    * This is called by the daily cron job
@@ -139,7 +80,7 @@ export class AnalyticsService {
    * Fetch and save historical daily data for a campaign
    * This is used when creating a new campaign or updating keywords
    */
-  async fetchAndSaveHistoricalDailyData({
+  async fetchHistoricalDailyData({
     campaignId,
     waitForAllData,
   }: {
@@ -207,7 +148,7 @@ export class AnalyticsService {
         );
 
         if (dailyKeywordsData) {
-          await this.saveHistoricalDailyKeywordsData(
+          await this.saveHistoricalDailyKeywords(
             dailyKeywordsData,
             campaign,
             monthStart,
@@ -226,252 +167,313 @@ export class AnalyticsService {
     }
   }
 
-  private async fetchKeywordsData({
-    campaign,
-    googleAccount,
+  /**
+   * Fetch and save daily site traffic data (dimensions: ['date'])
+   * This fetches overall site performance data by day
+   */
+  async fetchDailySiteTraffic({
+    campaignId,
     waitForAllData,
   }: {
-    campaign: Campaign;
-    googleAccount: GoogleAccount;
+    campaignId: string;
     waitForAllData: boolean;
-  }) {
+  }): Promise<boolean> {
     try {
-      const keywords = campaign.keywords.split('\n').filter((k) => k.trim());
-      if (!keywords.length) {
-        return null;
+      const campaign = await prisma.campaign.findUnique({
+        where: { id: campaignId },
+      });
+
+      if (!campaign) {
+        throw new Error('Campaign not found');
       }
 
-      const analytics: {
-        topRankingPages: Record<string, { page: string; impressions: number }>;
-        keywordsAnalytics: Record<string, webmasters_v3.Schema$ApiDataRow>;
-        keywordsPositions: Record<string, webmasters_v3.Schema$ApiDataRow>;
-        keywordsInitialPositions: Record<
-          string,
-          webmasters_v3.Schema$ApiDataRow
-        >;
-      } = {
-        topRankingPages: {},
-        keywordsAnalytics: {},
-        keywordsPositions: {},
-        keywordsInitialPositions: {},
-      };
-
-      // Get existing analytics record
-      const existingAnalytics =
-        await prisma.searchConsoleKeywordAnalytics.findFirst({
-          where: { siteUrl: campaign.searchConsoleSite },
-          include: {
-            keywords: {
-              include: {
-                monthlyStats: {
-                  orderBy: [{ year: 'desc' }, { month: 'desc' }],
-                },
-              },
-            },
-          },
-        });
-
-      // Find the last month we have data for
-      const lastDataMonth = this.getLastDataMonth(existingAnalytics);
-
-      // Calculate the starting date for fetching new data
-      const startingDate = moment(campaign.startingDate).startOf('month');
-      const fetchStartDate = lastDataMonth
-        ? moment()
-            .year(lastDataMonth.year)
-            .month(lastDataMonth.month - 1)
-            .add(1, 'month')
-            .startOf('month')
-        : startingDate;
-
-      // Calculate months to fetch, excluding the current month due to 3-day delay
-      const currentDate = moment();
-      const endDate = currentDate.clone().subtract(1, 'month').endOf('month');
-      const monthsCount = endDate.diff(fetchStartDate, 'months');
-
-      // Ensure we don't fetch the current month
-      const finalMonthsCount = Math.max(0, monthsCount);
-
-      debugLog('=== DEBUG: Month Fetching Logic ===');
-      debugLog('Current date: ' + currentDate.format('YYYY-MM-DD'));
-      debugLog('Fetch start date: ' + fetchStartDate.format('YYYY-MM-DD'));
-      debugLog('End date (previous month): ' + endDate.format('YYYY-MM-DD'));
-      debugLog('Months count: ' + monthsCount);
-      debugLog('Final months count: ' + finalMonthsCount);
-      debugLog('Last data month: ' + JSON.stringify(lastDataMonth));
-      debugLog('=====================================');
-
-      // Load existing data from database
-      if (existingAnalytics && lastDataMonth) {
-        analytics.topRankingPages =
-          this.getAllTopRankingPagesFromDB(existingAnalytics);
-        analytics.keywordsAnalytics =
-          this.getAllKeywordsAnalyticsFromDB(existingAnalytics);
-        analytics.keywordsPositions =
-          this.getAllPositionDataFromDB(existingAnalytics);
-        analytics.keywordsInitialPositions = this.getInitialPositionsFromDB(
-          existingAnalytics,
-          keywords
-        );
+      const googleAccount = await prisma.googleAccount.findUnique({
+        where: { id: campaign.googleAccountId },
+      });
+      if (!googleAccount) {
+        throw new Error('Google account not found');
       }
 
-      // Fetch new data only from the last data month onwards
-      debugLog('=== DEBUG: Starting month loop ===');
-      debugLog('Loop will run from i=0 to i=' + finalMonthsCount);
+      // Calculate date range for historical data
+      const campaignStartDate = moment(campaign.startingDate);
+      const threeDaysAgo = moment().subtract(3, 'days');
+      const endDate = threeDaysAgo.isBefore(campaignStartDate)
+        ? campaignStartDate
+        : threeDaysAgo;
 
-      for (let i = 0; i <= finalMonthsCount; i++) {
-        let startAt = fetchStartDate.clone().add(i, 'months');
-        let endAt = startAt.clone().endOf('month');
+      console.log(
+        `📊 Fetching daily site traffic for campaign: ${campaign.name}`
+      );
+      console.log(`   Start date: ${campaignStartDate.format('YYYY-MM-DD')}`);
+      console.log(`   End date: ${endDate.format('YYYY-MM-DD')}`);
 
-        debugLog(
-          `Loop iteration ${i}: Processing ${startAt.format(
-            'YYYY-MM'
-          )} (${startAt.format('YYYY-MM-DD')} to ${endAt.format('YYYY-MM-DD')})`
+      // Fetch daily site traffic data
+      const dailySiteTraffic = await this.fetchDailySiteTrafficData({
+        campaign,
+        googleAccount,
+        startAt: campaignStartDate,
+        endAt: endDate,
+        waitForAllData,
+      });
+
+      if (dailySiteTraffic) {
+        await this.saveDailySiteTrafficData(dailySiteTraffic, campaign);
+      }
+
+      return true;
+    } catch (error) {
+      console.error('Error fetching daily site traffic:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Fetch and save daily keyword data (dimensions: ['date', 'query'])
+   * This fetches keyword-specific daily performance data
+   */
+  async fetchDailyKeywordData({
+    campaignId,
+    waitForAllData,
+  }: {
+    campaignId: string;
+    waitForAllData: boolean;
+  }): Promise<boolean> {
+    console.log(
+      `🚀 fetchDailyKeywordData called for campaignId: ${campaignId}, waitForAllData: ${waitForAllData}`
+    );
+
+    try {
+      const campaign = await prisma.campaign.findUnique({
+        where: { id: campaignId },
+      });
+
+      if (!campaign) {
+        console.log(`❌ Campaign not found for ID: ${campaignId}`);
+        throw new Error('Campaign not found');
+      }
+
+      console.log(`✅ Found campaign: ${campaign.name}`);
+
+      const googleAccount = await prisma.googleAccount.findUnique({
+        where: { id: campaign.googleAccountId },
+      });
+      if (!googleAccount) {
+        throw new Error('Google account not found');
+      }
+
+      // Calculate date range for historical data
+      const campaignStartDate = moment(campaign.startingDate);
+      const threeDaysAgo = moment().subtract(3, 'days');
+      const endDate = threeDaysAgo.isBefore(campaignStartDate)
+        ? campaignStartDate
+        : threeDaysAgo;
+
+      console.log(
+        `🔍 Fetching daily keyword data for campaign: ${campaign.name}`
+      );
+      console.log(`   Start date: ${campaignStartDate.format('YYYY-MM-DD')}`);
+      console.log(`   End date: ${endDate.format('YYYY-MM-DD')}`);
+
+      // Fetch daily keyword data month by month to avoid API limits and ensure no gaps
+      let currentDate = campaignStartDate.clone();
+
+      while (currentDate.isSameOrBefore(endDate)) {
+        const monthStart = currentDate.clone().startOf('month');
+        const monthEnd = currentDate.clone().endOf('month');
+
+        // Don't go beyond the end date
+        const actualEnd = monthEnd.isAfter(endDate) ? endDate : monthEnd;
+
+        console.log(`   Fetching month: ${monthStart.format('YYYY-MM')}`);
+
+        // Check if we already have complete data for this month
+        const hasCompleteMonthData = await this.checkIfMonthHasCompleteData(
+          monthStart,
+          actualEnd,
+          this.parseCampaignKeywords(campaign),
+          campaign.searchConsoleSite
         );
 
-        // Skip if this month is not over yet
-        if (endAt.isAfter(moment())) {
-          debugLog(
-            `Skipping ${startAt.format('YYYY-MM')} - month not over yet`
+        if (hasCompleteMonthData) {
+          console.log(
+            `   Skipping API call for ${monthStart.format(
+              'YYYY-MM'
+            )} - complete data exists`
           );
+          currentDate.add(1, 'month').startOf('month');
           continue;
         }
 
-        // Fetch data for this specific month
-        debugLog(`Calling fetchMonthData for ${startAt.format('YYYY-MM')}`);
-        const monthData = await this.fetchMonthData({
-          campaign,
-          googleAccount,
-          startAt,
-          endAt,
-          waitForAllData,
-          keywords,
-        });
-
-        if (monthData) {
-          // Save this month's data immediately
-          await this.saveMonthData(monthData, campaign, startAt);
-
-          // Accumulate the data for the JSON export
-          if (monthData.topRankingPages) {
-            Object.assign(analytics.topRankingPages, monthData.topRankingPages);
-          }
-          if (monthData.keywordsAnalytics) {
-            Object.assign(
-              analytics.keywordsAnalytics,
-              monthData.keywordsAnalytics
-            );
-          }
-          if (monthData.keywordsPositions) {
-            Object.assign(
-              analytics.keywordsPositions,
-              monthData.keywordsPositions
-            );
-          }
-        }
-      }
-
-      // Fetch and save initial positions if we don't have them
-      if (!this.hasInitialPositionsData(existingAnalytics, keywords)) {
-        const keywordsInitialPositions =
-          await this.fetchKeywordsDataOnSpecificDate({
+        // Fetch daily keyword data for this month
+        const dailyKeywordData = await this.fetchDailyKeywordDataWithDimensions(
+          {
             campaign,
             googleAccount,
-            date: moment(campaign.startingDate).startOf('day'),
+            startAt: monthStart,
+            endAt: actualEnd,
             waitForAllData,
-            keywords,
-          });
-        if (keywordsInitialPositions) {
-          await this.saveInitialPositions(keywordsInitialPositions, campaign);
-          // Accumulate initial positions for JSON export
-          Object.assign(
-            analytics.keywordsInitialPositions,
-            keywordsInitialPositions
+          }
+        );
+
+        console.log(
+          `🔍 DEBUG - Daily keyword data for ${monthStart.format(
+            'YYYY-MM-DD'
+          )} to ${actualEnd.format('YYYY-MM-DD')}:`,
+          dailyKeywordData?.length || 0
+        );
+
+        if (dailyKeywordData) {
+          await this.saveDailyKeywordDataWithDimensions(
+            dailyKeywordData,
+            campaign
           );
         }
+
+        // Move to next month
+        currentDate.add(1, 'month').startOf('month');
       }
 
-      return analytics;
-    } catch (error) {
-      console.error('Error fetching keywords data:', error);
-      return null;
-    }
-  }
+      // Also fetch 7 days before campaign start date for initial positions
+      const initialPositionStartDate = campaignStartDate
+        .clone()
+        .subtract(7, 'days');
+      const initialPositionEndDate = campaignStartDate
+        .clone()
+        .subtract(1, 'day');
 
-  private async fetchMonthData({
-    campaign,
-    googleAccount,
-    startAt,
-    endAt,
-    waitForAllData,
-    keywords,
-  }: {
-    campaign: Campaign;
-    googleAccount: GoogleAccount;
-    startAt: moment.Moment;
-    endAt: moment.Moment;
-    waitForAllData: boolean;
-    keywords: string[];
-  }) {
-    try {
-      // Don't fetch data for the current month due to 3-day delay in Google Search Console
-      const currentDate = moment();
-      const isCurrentMonth =
-        startAt.month() === currentDate.month() &&
-        startAt.year() === currentDate.year();
+      console.log(
+        `🔍 Fetching initial position data for campaign: ${campaign.name}`
+      );
+      console.log(
+        `   Initial position start date: ${initialPositionStartDate.format(
+          'YYYY-MM-DD'
+        )}`
+      );
+      console.log(
+        `   Initial position end date: ${initialPositionEndDate.format(
+          'YYYY-MM-DD'
+        )}`
+      );
 
-      if (isCurrentMonth) {
-        debugLog(
-          `Skipping fetch for current month ${startAt.format(
-            'YYYY-MM'
-          )} - waiting for next month due to 3-day data delay`
+      const initialPositionData =
+        await this.fetchDailyKeywordDataWithDimensions({
+          campaign,
+          googleAccount,
+          startAt: initialPositionStartDate,
+          endAt: initialPositionEndDate,
+          waitForAllData,
+        });
+
+      console.log(
+        `📊 Initial position data fetched: ${
+          initialPositionData?.length || 0
+        } rows`
+      );
+      if (initialPositionData && initialPositionData.length > 0) {
+        console.log(
+          `📅 Sample initial position data:`,
+          initialPositionData.slice(0, 3)
         );
-        return null;
       }
-      // Fetch top ranking pages for this month
-      const topRankingPages = await this.fetchKeywordsTopRankingPages({
-        campaign,
-        googleAccount,
-        startAt,
-        endAt,
-        waitForAllData,
-        keywords,
-      });
 
-      // Fetch keywords analytics for this month
-      const keywordsAnalytics = await this.fetchKeywordsAnalytics({
-        campaign,
-        googleAccount,
-        startAt,
-        endAt,
-        waitForAllData,
-        keywords,
-      });
+      if (initialPositionData) {
+        console.log(`💾 Starting to save initial position data...`);
+        await this.saveInitialPositionData(initialPositionData, campaign);
+        console.log(`✅ Finished saving initial position data`);
+      } else {
+        console.log(`⚠️ No initial position data to save`);
+      }
 
-      // Fetch position data for this month
-      const keywordsPositions = await this.fetchKeywordsDataOnSpecificDate({
-        campaign,
-        googleAccount,
-        date: startAt
-          .clone()
-          .date(DAY_TO_FETCH_MONTHLY_POSITION)
-          .startOf('day'),
-        waitForAllData,
-        keywords,
-      });
-
-      return {
-        topRankingPages,
-        keywordsAnalytics,
-        keywordsPositions,
-      };
+      return true;
     } catch (error) {
-      console.error('Error fetching month data:', error);
-      return null;
+      console.error('Error fetching daily keyword data:', error);
+      return false;
     }
   }
 
-  private async saveMonthData(
+  private aggregateRowsMetrics = (rows: webmasters_v3.Schema$ApiDataRow[]) => {
+    const totalStats = rows.reduce(
+      (
+        acc: {
+          totalClicks: number;
+          totalImpressions: number;
+          sumOfPositions: number;
+        },
+        curr
+      ) => {
+        acc.totalClicks += curr.clicks || 0;
+        acc.totalImpressions += curr.impressions || 0;
+        acc.sumOfPositions += (curr.position || 0) * (curr.impressions || 0);
+
+        return acc;
+      },
+      {
+        totalClicks: 0,
+        totalImpressions: 0,
+        sumOfPositions: 0,
+      }
+    );
+
+    return {
+      totalClicks: totalStats.totalClicks,
+      totalImpressions: totalStats.totalImpressions,
+      averageCtr:
+        totalStats.totalImpressions > 0
+          ? Math.round(
+              (totalStats.totalClicks / totalStats.totalImpressions) * 100 * 10
+            ) / 10
+          : 0,
+      averagePosition:
+        totalStats.totalImpressions > 0
+          ? Math.round(
+              (totalStats.sumOfPositions / totalStats.totalImpressions) * 10
+            ) / 10
+          : 0,
+    };
+  };
+
+  private mergeQueryMetrics = (queryAnalytics: {
+    [key: string]: webmasters_v3.Schema$ApiDataRow[];
+  }) => {
+    const stats = Object.entries(queryAnalytics).reduce(
+      (acc, [query, rows]) => {
+        const queryStats = this.aggregateRowsMetrics(rows);
+        const weightedPosition =
+          queryStats.averagePosition * queryStats.totalImpressions;
+
+        return {
+          ...acc,
+          totalClicks: acc.totalClicks + queryStats.totalClicks,
+          totalImpressions: acc.totalImpressions + queryStats.totalImpressions,
+          sumOfWeightedPositions: acc.sumOfWeightedPositions + weightedPosition,
+        };
+      },
+      {
+        totalClicks: 0,
+        totalImpressions: 0,
+        sumOfWeightedPositions: 0,
+      }
+    );
+
+    return {
+      totalClicks: stats.totalClicks,
+      totalImpressions: stats.totalImpressions,
+      averageCtr:
+        stats.totalImpressions > 0
+          ? Math.round(
+              (stats.totalClicks / stats.totalImpressions) * 100 * 10
+            ) / 10
+          : 0,
+      averagePosition:
+        stats.totalImpressions > 0
+          ? Math.round(
+              (stats.sumOfWeightedPositions / stats.totalImpressions) * 10
+            ) / 10
+          : 0,
+    };
+  };
+
+  private async saveMonthlyData(
     monthData: {
       topRankingPages: Record<
         string,
@@ -485,9 +487,9 @@ export class AnalyticsService {
   ) {
     try {
       debugLog(
-        `saveMonthData called for ${monthDate.format('YYYY-MM')} - campaign: ${
-          campaign.name
-        }`
+        `saveMonthlyData called for ${monthDate.format(
+          'YYYY-MM'
+        )} - campaign: ${campaign.name}`
       );
       const siteUrl = campaign.searchConsoleSite;
       const month = monthDate.month() + 1; // moment months are 0-indexed
@@ -505,7 +507,7 @@ export class AnalyticsService {
       }
 
       // Get all keywords from the campaign
-      const keywords = campaign.keywords.split('\n').filter((k) => k.trim());
+      const keywords = this.parseCampaignKeywords(campaign);
 
       // Process each keyword for this month
       for (const keyword of keywords) {
@@ -595,7 +597,7 @@ export class AnalyticsService {
       }
 
       // Get all keywords from the campaign
-      const keywords = campaign.keywords.split('\n').filter((k) => k.trim());
+      const keywords = this.parseCampaignKeywords(campaign);
 
       // Process each keyword for initial positions
       for (const keyword of keywords) {
@@ -629,7 +631,7 @@ export class AnalyticsService {
     }
   }
 
-  private async fetchKeywordsTopRankingPages({
+  private async fetchTopRankingPages({
     campaign,
     googleAccount,
     startAt,
@@ -706,7 +708,7 @@ export class AnalyticsService {
     }
   }
 
-  private async fetchKeywordsAnalytics({
+  private async fetchKeywordData({
     campaign,
     googleAccount,
     startAt,
@@ -739,8 +741,8 @@ export class AnalyticsService {
         return null;
       }
 
-      // Change the structure of the data to be keyword: { impressions: number, etc. }
-      const groupedAnalytics = filteredAnalytics?.reduce(
+      // Group data by keyword
+      const groupedAnalytics = filteredAnalytics.reduce(
         (acc, { keys, ...rest }) => {
           const keyword = keys?.[0] as string;
           if (!acc[keyword]) {
@@ -753,60 +755,13 @@ export class AnalyticsService {
 
       return groupedAnalytics;
     } catch (error) {
-      console.error('Error fetching impressions:', error);
-      return null;
-    }
-  }
-
-  private async fetchKeywordsDataOnSpecificDate({
-    campaign,
-    googleAccount,
-    date,
-    waitForAllData,
-    keywords,
-  }: {
-    campaign: Campaign;
-    googleAccount: GoogleAccount;
-    date: moment.Moment;
-    waitForAllData: boolean;
-    keywords: string[];
-  }): Promise<Record<string, webmasters_v3.Schema$ApiDataRow> | null> {
-    try {
-      const data = await searchConsoleService.getAnalytics({
-        campaign,
-        googleAccount,
-        waitForAllData,
-        startAt: date,
-        endAt: date,
-        dimensions: ['query'],
-      });
-
-      const filteredData = data?.filter(({ keys }) =>
-        keywords.includes(keys?.[0] as string)
-      );
-
-      // Change the structure of the data to be keyword: { position: number, etc. }[]
-      const groupedData = filteredData?.reduce((acc, { keys, ...rest }) => {
-        const keyword = keys?.[0] as string;
-        if (!acc[keyword]) {
-          acc[keyword] = rest;
-        }
-        return acc;
-      }, {} as Record<string, webmasters_v3.Schema$ApiDataRow>);
-
-      if (!groupedData) {
-        return null;
-      }
-
-      return groupedData;
-    } catch (error) {
-      console.error('Error fetching keywords positions:', error);
+      console.error('Error fetching keyword data:', error);
       return null;
     }
   }
 
   // Helper methods to check and retrieve data from database
-  private getLastDataMonth(
+  private findLastDataMonth(
     existingAnalytics: any
   ): { month: number; year: number } | null {
     if (!existingAnalytics?.keywords?.length) return null;
@@ -855,7 +810,7 @@ export class AnalyticsService {
     return result;
   }
 
-  private getAllKeywordsAnalyticsFromDB(
+  private getAllKeywordAnalyticsFromDB(
     existingAnalytics: any
   ): Record<string, webmasters_v3.Schema$ApiDataRow> {
     const result: Record<string, webmasters_v3.Schema$ApiDataRow> = {};
@@ -899,7 +854,7 @@ export class AnalyticsService {
     return result;
   }
 
-  private hasTopRankingPagesData(
+  private hasTopRankingPages(
     existingAnalytics: any,
     keywords: string[],
     month: number,
@@ -921,7 +876,7 @@ export class AnalyticsService {
     });
   }
 
-  private getTopRankingPagesFromDB(
+  private findTopRankingPagesFromDB(
     existingAnalytics: any,
     keywords: string[],
     month: number,
@@ -951,7 +906,7 @@ export class AnalyticsService {
     return result;
   }
 
-  private hasKeywordsAnalyticsData(
+  private hasKeywordAnalytics(
     existingAnalytics: any,
     keywords: string[],
     month: number,
@@ -973,7 +928,7 @@ export class AnalyticsService {
     });
   }
 
-  private getKeywordsAnalyticsFromDB(
+  private findKeywordAnalyticsFromDB(
     existingAnalytics: any,
     keywords: string[],
     month: number,
@@ -1004,7 +959,7 @@ export class AnalyticsService {
     return result;
   }
 
-  private hasPositionData(
+  private hasPositions(
     existingAnalytics: any,
     keywords: string[],
     month: number,
@@ -1026,7 +981,7 @@ export class AnalyticsService {
     });
   }
 
-  private getPositionDataFromDB(
+  private findPositionDataFromDB(
     existingAnalytics: any,
     keywords: string[],
     month: number,
@@ -1057,7 +1012,7 @@ export class AnalyticsService {
     return result;
   }
 
-  private hasInitialPositionsData(
+  private hasInitialPositions(
     existingAnalytics: any,
     keywords: string[]
   ): boolean {
@@ -1071,7 +1026,7 @@ export class AnalyticsService {
     });
   }
 
-  private getInitialPositionsFromDB(
+  private findInitialPositionsFromDB(
     existingAnalytics: any,
     keywords: string[]
   ): Record<string, webmasters_v3.Schema$ApiDataRow> {
@@ -1095,7 +1050,7 @@ export class AnalyticsService {
     return result;
   }
 
-  private async saveKeywordsData(
+  private async saveKeywordRecords(
     keywordsData: {
       topRankingPages: Record<string, { page: string; impressions: number }>;
       keywordsAnalytics: Record<string, webmasters_v3.Schema$ApiDataRow>;
@@ -1125,7 +1080,7 @@ export class AnalyticsService {
       }
 
       // Get all keywords from the campaign
-      const keywords = campaign.keywords.split('\n').filter((k) => k.trim());
+      const keywords = this.parseCampaignKeywords(campaign);
 
       // Process each keyword
       for (const keyword of keywords) {
@@ -1156,7 +1111,7 @@ export class AnalyticsService {
           },
         });
 
-        // Note: Monthly stats are now handled by saveMonthData method
+        // Note: Monthly stats are now handled by saveMonthlyData method
         // This method only creates/updates keyword records and initial positions
       }
 
@@ -1311,7 +1266,7 @@ export class AnalyticsService {
         clicks: totalClicks,
         impressions: totalImpressions,
         ctr: parseFloat(ctr.toFixed(2)),
-        position: parseFloat(avgPosition.toFixed(2)),
+        position: avgPosition,
       };
     } catch (error) {
       console.error('Error fetching monthly traffic data:', error);
@@ -1365,7 +1320,7 @@ export class AnalyticsService {
             clicks,
             impressions,
             ctr: parseFloat(ctr.toFixed(2)),
-            position: parseFloat((row.position || 0).toFixed(2)),
+            position: row.position || 0,
           };
         }
       });
@@ -1373,6 +1328,129 @@ export class AnalyticsService {
       return dailyData;
     } catch (error) {
       console.error('Error fetching daily traffic data:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Fetch daily site traffic data with date dimension
+   */
+  private async fetchDailySiteTrafficData({
+    campaign,
+    googleAccount,
+    startAt,
+    endAt,
+    waitForAllData,
+  }: {
+    campaign: Campaign;
+    googleAccount: GoogleAccount;
+    startAt: moment.Moment;
+    endAt: moment.Moment;
+    waitForAllData: boolean;
+  }): Promise<Record<
+    string,
+    { clicks: number; impressions: number; ctr: number; position: number }
+  > | null> {
+    try {
+      const analytics = await searchConsoleService.getAnalytics({
+        campaign,
+        googleAccount,
+        waitForAllData,
+        startAt,
+        endAt,
+        dimensions: ['date'], // Site-wide traffic by date
+      });
+
+      if (!analytics || analytics.length === 0) {
+        return null;
+      }
+
+      const dailyData: Record<
+        string,
+        { clicks: number; impressions: number; ctr: number; position: number }
+      > = {};
+
+      analytics.forEach((row) => {
+        const dateKey = row.keys?.[0] as string;
+        if (dateKey) {
+          const clicks = row.clicks || 0;
+          const impressions = row.impressions || 0;
+          const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
+
+          dailyData[dateKey] = {
+            clicks,
+            impressions,
+            ctr: parseFloat(ctr.toFixed(2)),
+            position: row.position || 0,
+          };
+        }
+      });
+
+      return dailyData;
+    } catch (error) {
+      console.error('Error fetching daily site traffic data:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Fetch daily keyword data with date and query dimensions
+   */
+  private async fetchDailyKeywordDataWithDimensions({
+    campaign,
+    googleAccount,
+    startAt,
+    endAt,
+    waitForAllData,
+  }: {
+    campaign: Campaign;
+    googleAccount: GoogleAccount;
+    startAt: moment.Moment;
+    endAt: moment.Moment;
+    waitForAllData: boolean;
+  }): Promise<webmasters_v3.Schema$ApiDataRow[] | null> {
+    try {
+      const keywords = this.parseCampaignKeywords(campaign);
+
+      if (keywords.length === 0) {
+        return null;
+      }
+
+      // Fetch data with date and query dimensions
+      const analytics = await searchConsoleService.getAnalytics({
+        campaign,
+        googleAccount,
+        startAt: startAt,
+        endAt: endAt,
+        dimensions: ['date', 'query', 'page'], // Daily keyword data with page
+      });
+
+      console.log('Daily Keyword Analytics:', {
+        startAt: startAt.format('YYYY-MM-DD'),
+        endAt: endAt.format('YYYY-MM-DD'),
+        dimensions: ['date', 'query'],
+        rows: analytics?.length || 0,
+      });
+
+      if (!analytics) {
+        return null;
+      }
+
+      // Filter to only include our target keywords
+      const filteredAnalytics = analytics.filter((row) => {
+        if (row.keys && row.keys.length >= 2) {
+          const query = row.keys[1];
+          return keywords.includes(query);
+        }
+        return false;
+      });
+
+      return filteredAnalytics;
+    } catch (error) {
+      console.error(
+        'Error fetching daily keyword data with dimensions:',
+        error
+      );
       return null;
     }
   }
@@ -1437,7 +1515,7 @@ export class AnalyticsService {
 
       // Save daily traffic data
       for (const [dateKey, data] of Object.entries(trafficData.daily)) {
-        const date = moment(dateKey).toDate();
+        const date = moment.utc(dateKey, 'YYYY-MM-DD').startOf('day').toDate();
 
         await prisma.searchConsoleTrafficDaily.upsert({
           where: {
@@ -1470,7 +1548,381 @@ export class AnalyticsService {
     }
   }
 
-  private async logSearchConsoleDataSummary(
+  /**
+   * Save daily site traffic data to database
+   */
+  private async saveDailySiteTrafficData(
+    dailySiteTraffic: Record<
+      string,
+      { clicks: number; impressions: number; ctr: number; position: number }
+    >,
+    campaign: Campaign
+  ): Promise<void> {
+    try {
+      const siteUrl = campaign.searchConsoleSite;
+
+      // Find existing traffic analytics record or create a new one
+      let trafficAnalytics =
+        await prisma.searchConsoleTrafficAnalytics.findFirst({
+          where: { siteUrl },
+        });
+
+      if (!trafficAnalytics) {
+        trafficAnalytics = await prisma.searchConsoleTrafficAnalytics.create({
+          data: { siteUrl },
+        });
+      }
+
+      // Get the last recorded date to avoid checking every record
+      const lastRecordedDate = await this.getLastRecordedSiteTrafficDate(
+        trafficAnalytics.id
+      );
+
+      // Process each day's data
+      for (const [dateKey, data] of Object.entries(dailySiteTraffic)) {
+        const date = moment.utc(dateKey, 'YYYY-MM-DD').startOf('day').toDate();
+
+        // Skip if we already have data for this date or later
+        if (lastRecordedDate && date <= lastRecordedDate) {
+          console.log(
+            `Daily site traffic data already exists for ${dateKey} (last recorded: ${
+              lastRecordedDate.toISOString().split('T')[0]
+            })`
+          );
+          continue;
+        }
+
+        // Save daily site traffic data
+        await prisma.searchConsoleTrafficDaily.create({
+          data: {
+            analyticsId: trafficAnalytics.id,
+            date: date,
+            clicks: data.clicks,
+            impressions: data.impressions,
+            ctr: data.ctr,
+            position: data.position,
+          },
+        });
+
+        console.log(`Saved daily site traffic data for ${dateKey}`);
+      }
+    } catch (error) {
+      console.error('Error saving daily site traffic data:', error);
+    }
+  }
+
+  /**
+   * Save daily keyword data with dimensions to database
+   */
+  private async saveDailyKeywordDataWithDimensions(
+    dailyKeywordData: webmasters_v3.Schema$ApiDataRow[],
+    campaign: Campaign
+  ): Promise<void> {
+    try {
+      const siteUrl = campaign.searchConsoleSite;
+
+      // Find existing analytics record or create a new one
+      let analytics = await prisma.searchConsoleKeywordAnalytics.findFirst({
+        where: { siteUrl },
+      });
+
+      if (!analytics) {
+        analytics = await prisma.searchConsoleKeywordAnalytics.create({
+          data: { siteUrl },
+        });
+      }
+
+      // Get all keywords from the campaign
+      const keywords = this.parseCampaignKeywords(campaign);
+
+      // Process each row of data
+      for (const row of dailyKeywordData) {
+        if (!row.keys || row.keys.length < 2) continue;
+
+        const dateString = row.keys[0];
+        const query = row.keys[1];
+
+        // Only process data for our target keywords
+        if (!keywords.includes(query)) continue;
+
+        // Find the keyword record or create it if it doesn't exist
+        let keywordRecord = await prisma.searchConsoleKeyword.findUnique({
+          where: {
+            analyticsId_keyword: {
+              analyticsId: analytics.id,
+              keyword: query,
+            },
+          },
+        });
+
+        if (!keywordRecord) {
+          console.log(`Creating keyword record for: ${query}`);
+          keywordRecord = await prisma.searchConsoleKeyword.create({
+            data: {
+              analyticsId: analytics.id,
+              keyword: query,
+              initialPosition: 0,
+            },
+          });
+        }
+
+        const date = moment
+          .utc(dateString, 'YYYY-MM-DD')
+          .startOf('day')
+          .toDate();
+
+        // Check if daily data already exists for this specific date and keyword
+        const existingRecord =
+          await prisma.searchConsoleKeywordDailyStat.findUnique({
+            where: {
+              keywordId_date: {
+                keywordId: keywordRecord.id,
+                date: date,
+              },
+            },
+          });
+
+        if (existingRecord) {
+          console.log(
+            `Daily keyword data already exists for ${query} on ${dateString}`
+          );
+          continue;
+        }
+
+        // Save daily keyword stat
+        await prisma.searchConsoleKeywordDailyStat.create({
+          data: {
+            keywordId: keywordRecord.id,
+            date: date,
+            averageRank: row.position || 0,
+            searchVolume: row.impressions || 0,
+            topRankingPageUrl:
+              (row.keys && row.keys.length >= 3
+                ? (row.keys[2] as string)
+                : '') || '',
+          },
+        });
+
+        console.log(`Saved daily keyword data for ${query} on ${dateString}`);
+      }
+    } catch (error) {
+      console.error('Error saving daily keyword data with dimensions:', error);
+    }
+  }
+
+  private async saveInitialPositionData(
+    initialPositionData: webmasters_v3.Schema$ApiDataRow[],
+    campaign: Campaign
+  ): Promise<void> {
+    try {
+      console.log(
+        `🔍 Starting saveInitialPositionData for campaign: ${campaign.name}`
+      );
+      console.log(
+        `📊 Initial position data rows received: ${initialPositionData.length}`
+      );
+
+      const siteUrl = campaign.searchConsoleSite;
+      console.log(`🌐 Site URL: ${siteUrl}`);
+
+      // Find existing analytics record or create a new one
+      let analytics = await prisma.searchConsoleKeywordAnalytics.findFirst({
+        where: { siteUrl },
+      });
+
+      if (!analytics) {
+        console.log(`📝 Creating new analytics record for site: ${siteUrl}`);
+        analytics = await prisma.searchConsoleKeywordAnalytics.create({
+          data: { siteUrl },
+        });
+      } else {
+        console.log(`📝 Using existing analytics record: ${analytics.id}`);
+      }
+
+      // Get all keywords from the campaign
+      const keywords = this.parseCampaignKeywords(campaign);
+      console.log(`🔑 Campaign keywords: ${keywords.join(', ')}`);
+
+      // Group initial position data by keyword to calculate average
+      const keywordInitialPositions: Record<
+        string,
+        { totalPosition: number; totalImpressions: number; count: number }
+      > = {};
+
+      // Process each row of data and calculate weighted average
+      for (const row of initialPositionData) {
+        if (!row.keys || row.keys.length < 2) {
+          console.log(`⚠️ Skipping row with invalid keys:`, row);
+          continue;
+        }
+
+        const dateString = row.keys[0];
+        const query = row.keys[1];
+
+        console.log(`📅 Processing row - Date: ${dateString}, Query: ${query}`);
+
+        // Only process data for our target keywords
+        if (!keywords.includes(query)) {
+          console.log(`⚠️ Skipping query not in campaign keywords: ${query}`);
+          continue;
+        }
+
+        const position = row.position || 0;
+        const impressions = row.impressions || 0;
+
+        console.log(
+          `📊 Row data - Position: ${position}, Impressions: ${impressions}`
+        );
+
+        if (!keywordInitialPositions[query]) {
+          keywordInitialPositions[query] = {
+            totalPosition: 0,
+            totalImpressions: 0,
+            count: 0,
+          };
+        }
+
+        keywordInitialPositions[query].totalPosition += position * impressions;
+        keywordInitialPositions[query].totalImpressions += impressions;
+        keywordInitialPositions[query].count += 1;
+      }
+
+      console.log(`📈 Calculated initial positions:`, keywordInitialPositions);
+
+      // Update keyword records with calculated initial positions
+      for (const [query, data] of Object.entries(keywordInitialPositions)) {
+        console.log(`🔄 Processing keyword: ${query} with data:`, data);
+
+        // Find the keyword record or create it if it doesn't exist
+        let keywordRecord = await prisma.searchConsoleKeyword.findUnique({
+          where: {
+            analyticsId_keyword: {
+              analyticsId: analytics.id,
+              keyword: query,
+            },
+          },
+        });
+
+        if (!keywordRecord) {
+          console.log(`📝 Creating keyword record for: ${query}`);
+          keywordRecord = await prisma.searchConsoleKeyword.create({
+            data: {
+              analyticsId: analytics.id,
+              keyword: query,
+              initialPosition: 0,
+            },
+          });
+          console.log(`✅ Created keyword record: ${keywordRecord.id}`);
+        } else {
+          console.log(`📝 Using existing keyword record: ${keywordRecord.id}`);
+        }
+
+        // Calculate weighted average initial position
+        const weightedAveragePosition =
+          data.totalImpressions > 0
+            ? data.totalPosition / data.totalImpressions
+            : 0;
+
+        console.log(
+          `📊 Calculated weighted average: ${weightedAveragePosition}`
+        );
+
+        // Update the keyword record with the calculated initial position
+        const updatedKeyword = await prisma.searchConsoleKeyword.update({
+          where: { id: keywordRecord.id },
+          data: {
+            initialPosition: weightedAveragePosition,
+          },
+        });
+
+        console.log(
+          `✅ Updated initial position for keyword: ${query} = ${parseFloat(
+            weightedAveragePosition.toFixed(2)
+          )} (from ${data.count} days)`
+        );
+      }
+
+      // Also save the daily records for the initial position period
+      console.log(`📅 Starting to save daily records...`);
+      let dailyRecordsSaved = 0;
+
+      for (const row of initialPositionData) {
+        if (!row.keys || row.keys.length < 2) continue;
+
+        const dateString = row.keys[0];
+        const query = row.keys[1];
+
+        // Only process data for our target keywords
+        if (!keywords.includes(query)) continue;
+
+        // Find the keyword record
+        const keywordRecord = await prisma.searchConsoleKeyword.findUnique({
+          where: {
+            analyticsId_keyword: {
+              analyticsId: analytics.id,
+              keyword: query,
+            },
+          },
+        });
+
+        if (!keywordRecord) {
+          console.log(`⚠️ Keyword record not found for: ${query}`);
+          continue;
+        }
+
+        const date = moment
+          .utc(dateString, 'YYYY-MM-DD')
+          .startOf('day')
+          .toDate();
+
+        // Check if daily data already exists for this date
+        const existingDailyStat =
+          await prisma.searchConsoleKeywordDailyStat.findUnique({
+            where: {
+              keywordId_date: {
+                keywordId: keywordRecord.id,
+                date: date,
+              },
+            },
+          });
+
+        if (existingDailyStat) {
+          console.log(
+            `⚠️ Initial position daily data already exists for ${query} on ${dateString}`
+          );
+          continue;
+        }
+
+        // Save initial position daily data
+        const savedDailyStat =
+          await prisma.searchConsoleKeywordDailyStat.create({
+            data: {
+              keywordId: keywordRecord.id,
+              date: date,
+              averageRank: row.position || 0,
+              searchVolume: row.impressions || 0,
+              topRankingPageUrl: '', // We don't have this in daily data
+            },
+          });
+
+        dailyRecordsSaved++;
+        console.log(
+          `✅ Saved initial position daily data for keyword: ${query} on ${dateString} (ID: ${savedDailyStat.id})`
+        );
+      }
+
+      console.log(
+        `📊 Summary: Updated ${
+          Object.keys(keywordInitialPositions).length
+        } keyword initial positions, saved ${dailyRecordsSaved} daily records`
+      );
+    } catch (error) {
+      console.error('❌ Error saving initial position data:', error);
+      throw error; // Re-throw to see the full error stack
+    }
+  }
+
+  private async logAnalyticsSummary(
     keywordsData: {
       topRankingPages: Record<string, { page: string; impressions: number }>;
       keywordsAnalytics: Record<string, webmasters_v3.Schema$ApiDataRow>;
@@ -1521,7 +1973,7 @@ export class AnalyticsService {
     waitForAllData: boolean;
   }): Promise<webmasters_v3.Schema$ApiDataRow[] | null> {
     try {
-      const keywords = campaign.keywords.split('\n').filter((k) => k.trim());
+      const keywords = this.parseCampaignKeywords(campaign);
 
       if (keywords.length === 0) {
         return null;
@@ -1534,13 +1986,6 @@ export class AnalyticsService {
         startAt: startAt,
         endAt: endAt,
         dimensions: ['date', 'query'],
-      });
-
-      console.log('Daily Analytics:', {
-        startAt: startAt.format('YYYY-MM-DD'),
-        endAt: endAt.format('YYYY-MM-DD'),
-        dimensions: ['date', 'query'],
-        rows: analytics?.length || 0,
       });
 
       // Log analytics data for debugging
@@ -1604,7 +2049,7 @@ export class AnalyticsService {
       }
 
       // Get all keywords from the campaign
-      const keywords = campaign.keywords.split('\n').filter((k) => k.trim());
+      const keywords = this.parseCampaignKeywords(campaign);
 
       // Process each keyword
       for (const keyword of keywords) {
@@ -1665,7 +2110,7 @@ export class AnalyticsService {
           data: {
             keywordId: keywordRecord.id,
             date: targetDate.toDate(),
-            averageRank: parseFloat((positionData.position || 0).toFixed(2)),
+            averageRank: positionData.position || 0,
             searchVolume: positionData.impressions || 0,
             topRankingPageUrl: '', // We don't have this in daily data
           },
@@ -1684,7 +2129,7 @@ export class AnalyticsService {
    * Save historical daily keyword positions to the database
    * This method processes data for a date range and handles multiple dates
    */
-  private async saveHistoricalDailyKeywordsData(
+  private async saveHistoricalDailyKeywords(
     dailyKeywordsData: webmasters_v3.Schema$ApiDataRow[],
     campaign: Campaign,
     startAt: moment.Moment,
@@ -1706,7 +2151,7 @@ export class AnalyticsService {
       }
 
       // Get all keywords from the campaign
-      const keywords = campaign.keywords.split('\n').filter((k) => k.trim());
+      const keywords = this.parseCampaignKeywords(campaign);
 
       // Process each row of data
       for (const row of dailyKeywordsData) {
@@ -1739,12 +2184,12 @@ export class AnalyticsService {
           });
         }
 
-        const date = moment(dateString, 'YYYY-MM-DD')
+        const date = moment
+          .utc(dateString, 'YYYY-MM-DD')
           .startOf('day')
-          .utc()
           .toDate();
 
-        // Check if daily data already exists for this date
+        // Check if daily data already exists for this specific date and keyword
         const existingDailyStat =
           await prisma.searchConsoleKeywordDailyStat.findUnique({
             where: {
@@ -1767,9 +2212,12 @@ export class AnalyticsService {
           data: {
             keywordId: keywordRecord.id,
             date: date,
-            averageRank: parseFloat((row.position || 0).toFixed(2)),
+            averageRank: row.position || 0,
             searchVolume: row.impressions || 0,
-            topRankingPageUrl: '', // We don't have this in daily data
+            topRankingPageUrl:
+              (row.keys && row.keys.length >= 3
+                ? (row.keys[2] as string)
+                : '') || '',
           },
         });
 
@@ -1809,7 +2257,7 @@ export class AnalyticsService {
 
       // Process each day's data
       for (const [dateKey, data] of Object.entries(dailyTrafficData)) {
-        const date = moment(dateKey).toDate();
+        const date = moment.utc(dateKey, 'YYYY-MM-DD').toDate();
 
         // Check if daily data already exists for this date
         const existingDailyData =
@@ -1843,6 +2291,110 @@ export class AnalyticsService {
       }
     } catch (error) {
       console.error('Error saving daily traffic data:', error);
+    }
+  }
+
+  /**
+   * Parse campaign keywords from the keywords string
+   */
+  private parseCampaignKeywords(campaign: Campaign): string[] {
+    return campaign.keywords.split('\n').filter((k) => k.trim());
+  }
+
+  /**
+   * Get the last recorded date for daily site traffic data
+   */
+  private async getLastRecordedSiteTrafficDate(
+    analyticsId: string
+  ): Promise<Date | null> {
+    const lastRecord = await prisma.searchConsoleTrafficDaily.findFirst({
+      where: { analyticsId },
+      orderBy: { date: 'desc' },
+      select: { date: true },
+    });
+    return lastRecord?.date || null;
+  }
+
+  /**
+   * Get the last recorded date for daily keyword data
+   */
+  private async getLastRecordedKeywordDate(
+    analyticsId: string
+  ): Promise<Date | null> {
+    const lastRecord = await prisma.searchConsoleKeywordDailyStat.findFirst({
+      where: {
+        keyword: {
+          analyticsId,
+        },
+      },
+      orderBy: { date: 'desc' },
+      select: { date: true },
+    });
+    return lastRecord?.date || null;
+  }
+
+  /**
+   * Get the last recorded date for a specific keyword
+   */
+  private async getLastRecordedKeywordDateForSpecificKeyword(
+    keywordId: string
+  ): Promise<Date | null> {
+    const lastRecord = await prisma.searchConsoleKeywordDailyStat.findFirst({
+      where: {
+        keywordId,
+      },
+      orderBy: { date: 'desc' },
+      select: { date: true },
+    });
+    return lastRecord?.date || null;
+  }
+
+  /**
+   * Check if we have complete daily data for a specific month
+   */
+  private async checkIfMonthHasCompleteData(
+    monthStart: moment.Moment,
+    monthEnd: moment.Moment,
+    keywords: string[],
+    siteUrl: string
+  ): Promise<boolean> {
+    try {
+      const analytics = await prisma.searchConsoleKeywordAnalytics.findFirst({
+        where: { siteUrl },
+        include: {
+          keywords: {
+            include: {
+              dailyStats: {
+                where: {
+                  date: {
+                    gte: monthStart.toDate(),
+                    lte: monthEnd.toDate(),
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      if (!analytics || !analytics.keywords.length) return false;
+
+      // Check if we have data for all keywords for all days in the month
+      const daysInMonth = monthEnd.diff(monthStart, 'days') + 1;
+
+      for (const keyword of analytics.keywords) {
+        if (!keywords.includes(keyword.keyword)) continue;
+
+        // Check if we have daily records for all days in this month
+        if (keyword.dailyStats.length < daysInMonth) {
+          return false;
+        }
+      }
+
+      return true;
+    } catch (error) {
+      console.error('Error checking month completeness:', error);
+      return false;
     }
   }
 }

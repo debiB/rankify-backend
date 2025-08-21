@@ -6,11 +6,56 @@ import { AnalyticsService } from '../../services/analytics';
 
 const analyticsService = new AnalyticsService();
 
+/**
+ * Utility function to aggregate daily stats for a given period
+ * Calculates weighted average position and total search volume for the last N days
+ */
+const aggregateDailyStats = (stats: any[], days: number = 7) => {
+  if (stats.length === 0) return null;
+
+  // Sort by date and get the last N days
+  const sortedStats = [...stats].sort(
+    (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+  );
+  const lastDaysStats = sortedStats.slice(-days);
+
+  if (lastDaysStats.length === 0) return null;
+
+  // Calculate weighted average position (weighted by search volume)
+  let totalSearchVolume = 0;
+  let weightedPositionSum = 0;
+  let totalImpressions = 0;
+
+  lastDaysStats.forEach((stat) => {
+    const searchVolume = stat.searchVolume || 0;
+    const position = stat.averageRank || 0;
+
+    totalSearchVolume += searchVolume;
+    weightedPositionSum += position * searchVolume;
+    totalImpressions += searchVolume; // searchVolume is essentially impressions
+  });
+
+  const averagePosition =
+    totalImpressions > 0
+      ? weightedPositionSum / totalImpressions
+      : lastDaysStats[0]?.averageRank || 0;
+
+  return {
+    averagePosition: parseFloat(averagePosition.toFixed(2)),
+    totalSearchVolume,
+    daysCount: lastDaysStats.length,
+  };
+};
+
 // Helper function to handle keyword changes
 async function handleKeywordChanges(
   oldCampaign: any,
   newCampaign: any
 ): Promise<void> {
+  console.log(
+    `🔍 handleKeywordChanges called for campaign: ${newCampaign.name}`
+  );
+
   try {
     const oldKeywords = oldCampaign.keywords
       .split('\n')
@@ -41,6 +86,10 @@ async function handleKeywordChanges(
       )}], Added: [${addedKeywords.join(', ')}]`
     );
 
+    console.log(
+      `🌐 Looking for analytics record for site: ${newCampaign.searchConsoleSite}`
+    );
+
     // Get the analytics record for this campaign
     const analytics = await prisma.searchConsoleKeywordAnalytics.findFirst({
       where: { siteUrl: newCampaign.searchConsoleSite },
@@ -54,8 +103,46 @@ async function handleKeywordChanges(
     });
 
     if (!analytics) {
+      console.log(
+        `⚠️ No analytics record found for site: ${newCampaign.searchConsoleSite}`
+      );
+      console.log(`📝 Creating new analytics record and fetching data...`);
+
+      // Create analytics record and fetch data
+      if (addedKeywords.length > 0) {
+        console.log(
+          `🔄 Fetching data for ${
+            addedKeywords.length
+          } added keywords: ${addedKeywords.join(', ')}`
+        );
+
+        try {
+          // Trigger analytics fetch for the new keywords
+          console.log(`📊 Starting fetchDailySiteTraffic...`);
+          await analyticsService.fetchDailySiteTraffic({
+            campaignId: newCampaign.id,
+            waitForAllData: true,
+          });
+          console.log(`✅ Completed fetchDailySiteTraffic`);
+
+          // Also fetch daily keyword data for the new keywords
+          console.log(`🔍 Starting fetchDailyKeywordData...`);
+          await analyticsService.fetchDailyKeywordData({
+            campaignId: newCampaign.id,
+            waitForAllData: true,
+          });
+          console.log(`✅ Completed fetchDailyKeywordData`);
+        } catch (error) {
+          console.error('❌ Error fetching data for added keywords:', error);
+          throw error;
+        }
+      }
       return;
     }
+
+    console.log(
+      `✅ Found analytics record: ${analytics.id} with ${analytics.keywords.length} keywords`
+    );
 
     // Delete data for removed keywords
     if (removedKeywords.length > 0) {
@@ -78,17 +165,32 @@ async function handleKeywordChanges(
 
     // Fetch new data for added keywords
     if (addedKeywords.length > 0) {
-      // Trigger analytics fetch for the new keywords
-      analyticsService.fetchAndSaveAnalytics({
-        campaignId: newCampaign.id,
-        waitForAllData: false,
-      });
+      console.log(
+        `🔄 Fetching data for ${
+          addedKeywords.length
+        } added keywords: ${addedKeywords.join(', ')}`
+      );
 
-      // Also fetch historical daily data for the new keywords
-      analyticsService.fetchAndSaveHistoricalDailyData({
-        campaignId: newCampaign.id,
-        waitForAllData: false,
-      });
+      try {
+        // Trigger analytics fetch for the new keywords
+        console.log(`📊 Starting fetchDailySiteTraffic...`);
+        await analyticsService.fetchDailySiteTraffic({
+          campaignId: newCampaign.id,
+          waitForAllData: true,
+        });
+        console.log(`✅ Completed fetchDailySiteTraffic`);
+
+        // Also fetch daily keyword data for the new keywords
+        console.log(`🔍 Starting fetchDailyKeywordData...`);
+        await analyticsService.fetchDailyKeywordData({
+          campaignId: newCampaign.id,
+          waitForAllData: true,
+        });
+        console.log(`✅ Completed fetchDailyKeywordData`);
+      } catch (error) {
+        console.error('❌ Error fetching data for added keywords:', error);
+        throw error;
+      }
     }
   } catch (error) {
     console.error('Error handling keyword changes:', error);
@@ -184,16 +286,16 @@ export const campaignsRouter = router({
           },
         });
 
-        // Fetch the analytics (without waiting)
-        analyticsService.fetchAndSaveAnalytics({
+        // Fetch daily site traffic data (dimensions: ['date'])
+        analyticsService.fetchDailySiteTraffic({
           campaignId: campaign.id,
-          waitForAllData: false,
+          waitForAllData: true,
         });
 
-        // Also fetch historical daily data (without waiting)
-        analyticsService.fetchAndSaveHistoricalDailyData({
+        // Fetch daily keyword data (dimensions: ['date', 'query'])
+        analyticsService.fetchDailyKeywordData({
           campaignId: campaign.id,
-          waitForAllData: false,
+          waitForAllData: true,
         });
 
         return campaign;
@@ -391,15 +493,15 @@ export const campaignsRouter = router({
 
         // Trigger analytics fetch if starting date changed
         if (isStartingDateChanged) {
-          analyticsService.fetchAndSaveAnalytics({
+          analyticsService.fetchDailySiteTraffic({
             campaignId: campaign.id,
-            waitForAllData: false,
+            waitForAllData: true,
           });
 
-          // Also fetch historical daily data
-          analyticsService.fetchAndSaveHistoricalDailyData({
+          // Also fetch daily keyword data
+          analyticsService.fetchDailyKeywordData({
             campaignId: campaign.id,
-            waitForAllData: false,
+            waitForAllData: true,
           });
         }
 
@@ -687,14 +789,14 @@ export const campaignsRouter = router({
           });
         }
 
-        // Get analytics data
+        // Get analytics data with daily stats
         const analytics = await prisma.searchConsoleKeywordAnalytics.findFirst({
           where: { siteUrl: campaign.searchConsoleSite },
           include: {
             keywords: {
               include: {
-                monthlyStats: {
-                  orderBy: [{ year: 'asc' }, { month: 'asc' }],
+                dailyStats: {
+                  orderBy: { date: 'asc' },
                 },
               },
             },
@@ -708,10 +810,13 @@ export const campaignsRouter = router({
           };
         }
 
-        // Process the data for the frontend
+        // Process the data for the frontend using daily records
         const keywords = analytics.keywords.map((keyword) => {
           try {
             const monthlyData: Record<string, number | null> = {};
+            // Per-month aggregates for full-month search volume and top page (by impressions)
+            const monthlySearchVolumeByMonthKey: Record<string, number> = {};
+            const monthlyTopPageByMonthKey: Record<string, string> = {};
             const currentMonth = new Date().getMonth() + 1;
             const currentYear = new Date().getFullYear();
 
@@ -725,8 +830,8 @@ export const campaignsRouter = router({
                 year === new Date(campaign.startingDate).getFullYear()
                   ? new Date(campaign.startingDate).getMonth() + 1
                   : 1;
-              // Exclude current month due to 3-day delay in Google Search Console
-              const endMonth = year === currentYear ? currentMonth - 1 : 12;
+              // Include current month (we'll handle the 3-day delay in the calculation)
+              const endMonth = year === currentYear ? currentMonth : 12;
 
               for (let month = startMonth; month <= endMonth; month++) {
                 const monthKey = `${month}/${year}`;
@@ -734,17 +839,112 @@ export const campaignsRouter = router({
               }
             }
 
-            // Fill in actual data
-            if (keyword.monthlyStats && Array.isArray(keyword.monthlyStats)) {
-              keyword.monthlyStats.forEach((stat) => {
-                if (
-                  stat &&
-                  typeof stat.month === 'number' &&
-                  typeof stat.year === 'number'
-                ) {
-                  const monthKey = `${stat.month}/${stat.year}`;
-                  monthlyData[monthKey] = stat.averageRank || null;
+            // Calculate initial rank from 7 days before campaign start date
+            let initialRank = keyword.initialPosition || 0;
+            if (keyword.dailyStats && Array.isArray(keyword.dailyStats)) {
+              const campaignStartDate = new Date(campaign.startingDate);
+              const initialPositionStartDate = new Date(campaignStartDate);
+              initialPositionStartDate.setDate(
+                initialPositionStartDate.getDate() - 7
+              );
+              const initialPositionEndDate = new Date(campaignStartDate);
+              initialPositionEndDate.setDate(
+                initialPositionEndDate.getDate() - 1
+              );
+
+              // Get daily stats for the 7 days before campaign start
+              const initialPositionStats = keyword.dailyStats.filter((stat) => {
+                if (stat && stat.date) {
+                  const statDate = new Date(stat.date);
+                  return (
+                    statDate >= initialPositionStartDate &&
+                    statDate <= initialPositionEndDate
+                  );
                 }
+                return false;
+              });
+
+              if (initialPositionStats.length > 0) {
+                console.log('initialPositionStats', initialPositionStats);
+                // Calculate weighted average position for initial rank
+                const aggregated = aggregateDailyStats(initialPositionStats, 7);
+                if (aggregated) {
+                  initialRank = aggregated.averagePosition;
+                  console.log('initialRank', initialRank);
+                }
+              }
+            }
+
+            // Calculate monthly averages from daily data (last week of each month)
+            if (keyword.dailyStats && Array.isArray(keyword.dailyStats)) {
+              const dailyStatsByMonth: Record<string, any[]> = {};
+
+              // Group daily stats by month
+              keyword.dailyStats.forEach((stat) => {
+                if (stat && stat.date) {
+                  const date = new Date(stat.date);
+                  const monthKey = `${
+                    date.getMonth() + 1
+                  }/${date.getFullYear()}`;
+
+                  if (!dailyStatsByMonth[monthKey]) {
+                    dailyStatsByMonth[monthKey] = [];
+                  }
+                  dailyStatsByMonth[monthKey].push(stat);
+                }
+              });
+
+              // Calculate average for each month
+              Object.keys(dailyStatsByMonth).forEach((monthKey) => {
+                const stats = dailyStatsByMonth[monthKey];
+
+                // For current month, use all available data (respecting 3-day delay)
+                // For past months, use the last 7 days
+                const [month, year] = monthKey.split('/').map(Number);
+                const isCurrentMonth =
+                  month === currentMonth && year === currentYear;
+
+                // If it's the current month, use all available data
+                // If it's a past month, use the last 7 days
+                const daysToUse = isCurrentMonth ? stats.length : 7;
+                const aggregated = aggregateDailyStats(stats, daysToUse);
+
+                if (aggregated) {
+                  monthlyData[monthKey] = aggregated.averagePosition;
+                }
+              });
+
+              Object.keys(dailyStatsByMonth).forEach((monthKey) => {
+                const stats = dailyStatsByMonth[monthKey];
+
+                // Sum the whole month's search volume
+                const monthTotalSearchVolume = stats.reduce(
+                  (sum: number, s: any) => sum + (s.searchVolume || 0),
+                  0
+                );
+                monthlySearchVolumeByMonthKey[monthKey] =
+                  monthTotalSearchVolume;
+
+                // Determine top page for the whole month by highest accumulated search volume
+                const pageToImpressions: Record<string, number> = {};
+                stats.forEach((s: any) => {
+                  const url = s.topRankingPageUrl || '';
+                  if (!url) return;
+                  pageToImpressions[url] =
+                    (pageToImpressions[url] || 0) + (s.searchVolume || 0);
+                });
+
+                let topPageUrl = '';
+                let topPageImpressions = -1;
+                Object.keys(pageToImpressions).forEach((url) => {
+                  const impressions = pageToImpressions[url];
+                  if (impressions > topPageImpressions) {
+                    topPageImpressions = impressions;
+                    topPageUrl = url;
+                  }
+                });
+
+                monthlyTopPageByMonthKey[monthKey] = topPageUrl;
               });
             }
 
@@ -772,24 +972,149 @@ export const campaignsRouter = router({
               const selectedMonthNum =
                 monthNames.indexOf(selectedMonthName) + 1;
 
-              selectedMonthStat = keyword.monthlyStats?.find(
-                (stat) =>
-                  stat.month === selectedMonthNum &&
-                  stat.year === parseInt(selectedYear)
-              );
+              // Find the selected month's average from daily data
+              const selectedMonthKey = `${selectedMonthNum}/${parseInt(
+                selectedYear
+              )}`;
+              const selectedMonthValue = monthlyData[selectedMonthKey];
+
+              if (
+                selectedMonthValue !== null &&
+                selectedMonthValue !== undefined
+              ) {
+                // Compute full-month aggregates for search volume and top page from dailyStats
+                const selectedMonthStats = (keyword.dailyStats || []).filter(
+                  (stat) => {
+                    if (!stat || !stat.date) return false;
+                    const d = new Date(stat.date);
+                    return (
+                      d.getMonth() + 1 === selectedMonthNum &&
+                      d.getFullYear() === parseInt(selectedYear)
+                    );
+                  }
+                );
+
+                const monthSearchVolume = selectedMonthStats.reduce(
+                  (sum, s) => sum + (s.searchVolume || 0),
+                  0
+                );
+
+                const pageToImpressions: Record<string, number> = {};
+                selectedMonthStats.forEach((s) => {
+                  const url = s.topRankingPageUrl || '';
+                  if (!url) return;
+                  pageToImpressions[url] =
+                    (pageToImpressions[url] || 0) + (s.searchVolume || 0);
+                });
+                let monthTopPageUrl = '';
+                let topImpr = -1;
+                Object.keys(pageToImpressions).forEach((url) => {
+                  const impr = pageToImpressions[url];
+                  if (impr > topImpr) {
+                    topImpr = impr;
+                    monthTopPageUrl = url;
+                  }
+                });
+
+                selectedMonthStat = {
+                  averageRank: selectedMonthValue,
+                  searchVolume: monthSearchVolume,
+                  topRankingPageUrl: monthTopPageUrl,
+                };
+              }
             }
 
             // Calculate changes
-            const stats = keyword.monthlyStats || [];
-            const latestStat =
-              stats.length > 0 ? stats[stats.length - 1] : null;
+            const monthlyValues = Object.values(monthlyData).filter(
+              (val) => val !== null
+            );
+            const latestValue =
+              monthlyValues.length > 0
+                ? monthlyValues[monthlyValues.length - 1]
+                : null;
 
             // Use selected month stat if available, otherwise use latest
-            const currentStat = selectedMonthStat || latestStat;
+            const currentStat =
+              selectedMonthStat ||
+              (latestValue
+                ? {
+                    averageRank: latestValue,
+                    searchVolume: (() => {
+                      try {
+                        // Determine latest month key with data
+                        const availableMonthKeys = Object.keys(monthlyData)
+                          .filter((k) => monthlyData[k] !== null)
+                          .sort((a, b) => {
+                            const [mA, yA] = a.split('/').map(Number);
+                            const [mB, yB] = b.split('/').map(Number);
+                            return yA - yB || mA - mB;
+                          });
+                        const latestMonthKey =
+                          availableMonthKeys[availableMonthKeys.length - 1];
+                        const [m, y] = latestMonthKey.split('/').map(Number);
+                        // Sum full-month impressions from dailyStats for that month
+                        const stats = (keyword.dailyStats || []).filter((s) => {
+                          if (!s || !s.date) return false;
+                          const d = new Date(s.date);
+                          return (
+                            d.getMonth() + 1 === m && d.getFullYear() === y
+                          );
+                        });
+                        return stats.reduce(
+                          (sum, s) => sum + (s.searchVolume || 0),
+                          0
+                        );
+                      } catch {
+                        return 0;
+                      }
+                    })(),
+                    topRankingPageUrl: (() => {
+                      try {
+                        const availableMonthKeys = Object.keys(monthlyData)
+                          .filter((k) => monthlyData[k] !== null)
+                          .sort((a, b) => {
+                            const [mA, yA] = a.split('/').map(Number);
+                            const [mB, yB] = b.split('/').map(Number);
+                            return yA - yB || mA - mB;
+                          });
+                        const latestMonthKey =
+                          availableMonthKeys[availableMonthKeys.length - 1];
+                        const [m, y] = latestMonthKey.split('/').map(Number);
+                        const stats = (keyword.dailyStats || []).filter((s) => {
+                          if (!s || !s.date) return false;
+                          const d = new Date(s.date);
+                          return (
+                            d.getMonth() + 1 === m && d.getFullYear() === y
+                          );
+                        });
+                        const pageToImpressions: Record<string, number> = {};
+                        stats.forEach((s) => {
+                          const url = s.topRankingPageUrl || '';
+                          if (!url) return;
+                          pageToImpressions[url] =
+                            (pageToImpressions[url] || 0) +
+                            (s.searchVolume || 0);
+                        });
+                        let best = '';
+                        let bestImpr = -1;
+                        Object.keys(pageToImpressions).forEach((url) => {
+                          const impr = pageToImpressions[url];
+                          if (impr > bestImpr) {
+                            bestImpr = impr;
+                            best = url;
+                          }
+                        });
+                        return best;
+                      } catch {
+                        return '';
+                      }
+                    })(),
+                  }
+                : null);
 
             // Find the previous month stat for the selected month
             let previousMonthStat = null;
-            if (selectedMonthStat) {
+            if (selectedMonthStat && input.selectedMonth) {
               // Find the month before the selected month
               const selectedMonthParts = input.selectedMonth!.split(' ');
               const selectedMonthName = selectedMonthParts[0];
@@ -820,13 +1145,28 @@ export const campaignsRouter = router({
                 prevYear--;
               }
 
-              previousMonthStat = keyword.monthlyStats?.find(
-                (stat) => stat.month === prevMonth && stat.year === prevYear
-              );
+              const prevMonthKey = `${prevMonth}/${prevYear}`;
+              const prevMonthValue = monthlyData[prevMonthKey];
+
+              if (prevMonthValue !== null && prevMonthValue !== undefined) {
+                previousMonthStat = {
+                  averageRank: prevMonthValue,
+                  searchVolume: 0,
+                  topRankingPageUrl: '',
+                };
+              }
             } else {
-              // Fallback to the second-to-last stat
-              previousMonthStat =
-                stats.length > 1 ? stats[stats.length - 2] : null;
+              // Fallback to the second-to-last month
+              const monthlyValues = Object.values(monthlyData).filter(
+                (val) => val !== null
+              );
+              if (monthlyValues.length > 1) {
+                previousMonthStat = {
+                  averageRank: monthlyValues[monthlyValues.length - 2],
+                  searchVolume: 0,
+                  topRankingPageUrl: '',
+                };
+              }
             }
 
             const monthlyChange =
@@ -836,18 +1176,78 @@ export const campaignsRouter = router({
                 : 0;
 
             const overallChange = currentStat
-              ? (keyword.initialPosition || 0) - (currentStat.averageRank || 0)
+              ? initialRank - (currentStat.averageRank || 0)
               : 0;
+
+            // Calculate search volume for the whole month (or all available days for current month)
+            let searchVolume = 0;
+            try {
+              if (input.selectedMonth) {
+                const selectedMonthParts = input.selectedMonth.split(' ');
+                const selectedMonthName = selectedMonthParts[0];
+                const selectedYear = selectedMonthParts[1];
+                const monthNames = [
+                  'January',
+                  'February',
+                  'March',
+                  'April',
+                  'May',
+                  'June',
+                  'July',
+                  'August',
+                  'September',
+                  'October',
+                  'November',
+                  'December',
+                ];
+                const selectedMonthNum =
+                  monthNames.indexOf(selectedMonthName) + 1;
+                const stats = (keyword.dailyStats || []).filter((s) => {
+                  if (!s || !s.date) return false;
+                  const d = new Date(s.date);
+                  return (
+                    d.getMonth() + 1 === selectedMonthNum &&
+                    d.getFullYear() === parseInt(selectedYear)
+                  );
+                });
+                searchVolume = stats.reduce(
+                  (sum, s) => sum + (s.searchVolume || 0),
+                  0
+                );
+              } else {
+                const availableMonthKeys = Object.keys(monthlyData)
+                  .filter((k) => monthlyData[k] !== null)
+                  .sort((a, b) => {
+                    const [mA, yA] = a.split('/').map(Number);
+                    const [mB, yB] = b.split('/').map(Number);
+                    return yA - yB || mA - mB;
+                  });
+                const latestMonthKey =
+                  availableMonthKeys[availableMonthKeys.length - 1];
+                const [m, y] = latestMonthKey.split('/').map(Number);
+                const stats = (keyword.dailyStats || []).filter((s) => {
+                  if (!s || !s.date) return false;
+                  const d = new Date(s.date);
+                  return d.getMonth() + 1 === m && d.getFullYear() === y;
+                });
+                searchVolume = stats.reduce(
+                  (sum, s) => sum + (s.searchVolume || 0),
+                  0
+                );
+              }
+            } catch {
+              searchVolume = 0;
+            }
 
             return {
               id: keyword.id,
               keyword: keyword.keyword,
-              initialRank: keyword.initialPosition || 0,
+              initialRank: initialRank,
               monthlyData,
               monthlyChange,
               overallChange,
               position: currentStat?.averageRank || 0,
-              searchVolume: currentStat?.searchVolume || 0,
+              searchVolume: searchVolume,
               topPageLink: (() => {
                 try {
                   const url = currentStat?.topRankingPageUrl || '';

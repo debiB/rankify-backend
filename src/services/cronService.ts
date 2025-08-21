@@ -99,10 +99,18 @@ export class CronService {
           );
 
           try {
-            const success = await analyticsService.fetchAndSaveAnalytics({
+            // Fetch daily site traffic and keyword data
+            const siteTrafficSuccess = await analyticsService.fetchDailySiteTraffic({
               campaignId: campaign.id,
               waitForAllData: true, // Run in background
             });
+            
+            const keywordDataSuccess = await analyticsService.fetchDailyKeywordData({
+              campaignId: campaign.id,
+              waitForAllData: true, // Run in background
+            });
+            
+            const success = siteTrafficSuccess && keywordDataSuccess;
 
             if (success) {
               console.log(
