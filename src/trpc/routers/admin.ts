@@ -3,6 +3,7 @@ import { TRPCError } from '@trpc/server';
 import { adminProcedure, router } from '../context';
 import { prisma } from '../../utils/prisma';
 import { CronService } from '../../services/cronService';
+import { AnalyticsService } from '../../services/analytics';
 import { comparePassword } from '../../utils/auth';
 
 export const adminRouter = router({
@@ -165,6 +166,90 @@ export const adminRouter = router({
       throw new TRPCError({
         code: 'INTERNAL_SERVER_ERROR',
         message: 'Failed to trigger monthly analytics job',
+      });
+    }
+  }),
+
+  // Get all data for all campaigns
+  getAllData: adminProcedure.mutation(async () => {
+    try {
+      console.log('Admin triggered get all data for all campaigns...');
+
+      // Get all campaigns
+      const campaigns = await prisma.campaign.findMany({
+        where: { status: 'ACTIVE' },
+        include: {
+          googleAccount: true,
+        },
+      });
+
+      console.log(`Found ${campaigns.length} active campaigns`);
+
+      const analyticsService = new AnalyticsService();
+      const results = [];
+
+      for (const campaign of campaigns) {
+        try {
+          console.log(`Processing campaign: ${campaign.name}`);
+
+          // Fetch daily site traffic data
+          const siteTrafficSuccess =
+            await analyticsService.fetchDailySiteTraffic({
+              campaignId: campaign.id,
+              waitForAllData: true,
+            });
+
+          // Fetch daily keyword data
+          const keywordDataSuccess =
+            await analyticsService.fetchDailyKeywordData({
+              campaignId: campaign.id,
+              waitForAllData: true,
+            });
+
+          // Fetch monthly traffic data
+          const monthlyTrafficSuccess =
+            await analyticsService.fetchAndSaveMonthlyTrafficData({
+              campaignId: campaign.id,
+              waitForAllData: true,
+            });
+
+          results.push({
+            campaignId: campaign.id,
+            campaignName: campaign.name,
+            siteTraffic: siteTrafficSuccess,
+            keywordData: keywordDataSuccess,
+            monthlyTraffic: monthlyTrafficSuccess,
+          });
+
+          console.log(`Completed processing campaign: ${campaign.name}`);
+        } catch (error) {
+          console.error(`Error processing campaign ${campaign.name}:`, error);
+          results.push({
+            campaignId: campaign.id,
+            campaignName: campaign.name,
+            error: error instanceof Error ? error.message : 'Unknown error',
+          });
+        }
+      }
+
+      const successfulCampaigns = results.filter((r) => !r.error).length;
+      const failedCampaigns = results.filter((r) => r.error).length;
+
+      return {
+        success: true,
+        message: `Data fetch completed. ${successfulCampaigns} campaigns successful, ${failedCampaigns} failed.`,
+        results,
+        summary: {
+          totalCampaigns: campaigns.length,
+          successful: successfulCampaigns,
+          failed: failedCampaigns,
+        },
+      };
+    } catch (error) {
+      console.error('Error getting all data:', error);
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to get all data',
       });
     }
   }),
