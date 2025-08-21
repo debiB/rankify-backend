@@ -101,7 +101,7 @@ model SearchConsoleKeywordMonthlyStat {
   year               Int
   averageRank        Float
   searchVolume       Int
-  topRankingPageUrl  String
+  topRankingPageUrl  String   @db.Text
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
@@ -117,7 +117,7 @@ model SearchConsoleKeywordDailyStat {
   date               DateTime
   averageRank        Float
   searchVolume       Int
-  topRankingPageUrl  String
+  topRankingPageUrl  String   @db.Text
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
