@@ -109,8 +109,14 @@ export class CronService {
               campaignId: campaign.id,
               waitForAllData: true, // Run in background
             });
+
+            // Fetch monthly traffic data for the last 12 months
+            const monthlyTrafficSuccess = await analyticsService.fetchAndSaveMonthlyTrafficData({
+              campaignId: campaign.id,
+              waitForAllData: true, // Run in background
+            });
             
-            const success = siteTrafficSuccess && keywordDataSuccess;
+            const success = siteTrafficSuccess && keywordDataSuccess && monthlyTrafficSuccess;
 
             if (success) {
               console.log(

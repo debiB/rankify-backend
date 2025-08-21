@@ -298,6 +298,12 @@ export const campaignsRouter = router({
           waitForAllData: true,
         });
 
+        // Fetch monthly traffic data for the last 12 months
+        analyticsService.fetchAndSaveMonthlyTrafficData({
+          campaignId: campaign.id,
+          waitForAllData: true,
+        });
+
         return campaign;
       } catch (error) {
         if (error instanceof TRPCError) {
@@ -500,6 +506,12 @@ export const campaignsRouter = router({
 
           // Also fetch daily keyword data
           analyticsService.fetchDailyKeywordData({
+            campaignId: campaign.id,
+            waitForAllData: true,
+          });
+
+          // Also fetch monthly traffic data
+          analyticsService.fetchAndSaveMonthlyTrafficData({
             campaignId: campaign.id,
             waitForAllData: true,
           });
@@ -1402,12 +1414,64 @@ export const campaignsRouter = router({
             );
           });
 
+          // Only add months that have actual clicks (meaningful engagement)
+          if (monthData && monthData.clicks > 0) {
+            last12Months.push({
+              month: monthKey,
+              clicks: monthData.clicks,
+              impressions: monthData.impressions,
+              ctr: monthData.ctr,
+              position: monthData.position,
+            });
+          }
+        }
+
+        // Add current month data by aggregating daily records
+        const currentMonthForChart = new Date().getMonth();
+        const currentYearForChart = new Date().getFullYear();
+        const currentMonthName = monthNames[currentMonthForChart];
+        const currentYearShort = currentYearForChart.toString().slice(-2);
+        const currentMonthKey = `${currentMonthName} ${currentYearShort}`;
+
+        // Get daily records for current month
+        const currentMonthDailyRecords = trafficAnalytics.daily.filter(
+          (day) => {
+            const date = new Date(day.date);
+            return (
+              date.getMonth() === currentMonthForChart &&
+              date.getFullYear() === currentYearForChart
+            );
+          }
+        );
+
+        // Aggregate current month data from daily records
+        if (currentMonthDailyRecords.length > 0) {
+          const totalClicks = currentMonthDailyRecords.reduce(
+            (sum, day) => sum + day.clicks,
+            0
+          );
+          const totalImpressions = currentMonthDailyRecords.reduce(
+            (sum, day) => sum + day.impressions,
+            0
+          );
+          const totalPosition = currentMonthDailyRecords.reduce(
+            (sum, day) => sum + day.position,
+            0
+          );
+
+          const averageCtr =
+            totalImpressions > 0 ? (totalClicks / totalImpressions) * 100 : 0;
+          const averagePosition =
+            currentMonthDailyRecords.length > 0
+              ? totalPosition / currentMonthDailyRecords.length
+              : 0;
+
           last12Months.push({
-            month: monthKey,
-            clicks: monthData?.clicks || 0,
-            impressions: monthData?.impressions || 0,
-            ctr: monthData?.ctr || 0,
-            position: monthData?.position || 0,
+            month: currentMonthKey,
+            clicks: totalClicks,
+            impressions: totalImpressions,
+            ctr: parseFloat(averageCtr.toFixed(2)),
+            position: parseFloat(averagePosition.toFixed(2)),
           });
         }
 

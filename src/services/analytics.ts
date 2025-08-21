@@ -228,6 +228,58 @@ export class AnalyticsService {
   }
 
   /**
+   * Fetch and save monthly traffic data for the last 12 months
+   * This fetches overall site traffic data by month
+   */
+  async fetchAndSaveMonthlyTrafficData({
+    campaignId,
+    waitForAllData,
+  }: {
+    campaignId: string;
+    waitForAllData: boolean;
+  }): Promise<boolean> {
+    try {
+      const campaign = await prisma.campaign.findUnique({
+        where: { id: campaignId },
+      });
+
+      if (!campaign) {
+        throw new Error('Campaign not found');
+      }
+
+      const googleAccount = await prisma.googleAccount.findUnique({
+        where: { id: campaign.googleAccountId },
+      });
+      if (!googleAccount) {
+        throw new Error('Google account not found');
+      }
+
+      console.log(
+        `📊 Fetching monthly traffic data for campaign: ${campaign.name}`
+      );
+
+      // Fetch traffic data for the last 12 months
+      const trafficData = await this.fetchTrafficData({
+        campaign,
+        googleAccount,
+        waitForAllData,
+      });
+
+      if (trafficData) {
+        await this.saveTrafficData(trafficData, campaign);
+        console.log(
+          `✅ Successfully saved monthly traffic data for campaign: ${campaign.name}`
+        );
+      }
+
+      return true;
+    } catch (error) {
+      console.error('Error fetching monthly traffic data:', error);
+      return false;
+    }
+  }
+
+  /**
    * Fetch and save daily keyword data (dimensions: ['date', 'query'])
    * This fetches keyword-specific daily performance data
    */
