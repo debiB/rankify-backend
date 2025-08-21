@@ -1634,7 +1634,7 @@ export const campaignsRouter = router({
               weeklyPercentage: 0,
               monthlyChange: { up: 0, neutral: 0, down: 0 },
               monthlyPercentage: 0,
-              overallPerformance: { google: 0, mobile: 0 },
+              overallPerformance: 0,
             });
             continue;
           }
@@ -1664,17 +1664,10 @@ export const campaignsRouter = router({
           let monthlyUp = 0;
           let monthlyNeutral = 0;
           let monthlyDown = 0;
-          let totalKeywords = 0;
+          const totalKeywords = analytics.keywords.length;
 
           // Calculate changes for each keyword
           for (const keyword of analytics.keywords) {
-            const currentMonthStat = keyword.monthlyStats.find(
-              (stat) => stat.month === currentMonth && stat.year === currentYear
-            );
-            const prevMonthStat = keyword.monthlyStats.find(
-              (stat) => stat.month === prevMonth && stat.year === prevYear
-            );
-
             // Get daily stats for weekly calculation
             const currentWeekStats = keyword.dailyStats.filter(
               (stat) => new Date(stat.date) >= oneWeekAgo
@@ -1684,42 +1677,8 @@ export const campaignsRouter = router({
               return statDate >= twoWeeksAgo && statDate < oneWeekAgo;
             });
 
-            // Calculate monthly change using only monthly data - compare 2 last available months
-            let hasMonthlyData = false;
-            if (keyword.monthlyStats.length >= 2) {
-              // Get the 2 most recent months
-              const sortedMonthlyStats = keyword.monthlyStats
-                .sort((a, b) => {
-                  if (a.year !== b.year) return b.year - a.year;
-                  return b.month - a.month;
-                })
-                .slice(0, 2);
-
-              const mostRecentMonth = sortedMonthlyStats[0];
-              const secondMostRecentMonth = sortedMonthlyStats[1];
-
-              hasMonthlyData = true;
-              totalKeywords++;
-              const monthlyChange = Math.floor(
-                secondMostRecentMonth.averageRank - mostRecentMonth.averageRank
-              );
-
-              if (monthlyChange > 0) {
-                monthlyUp++; // Improved position (lower number is better)
-              } else if (monthlyChange < 0) {
-                monthlyDown++; // Worse position (higher number is worse)
-              } else {
-                monthlyNeutral++; // No change
-              }
-            }
-
-            // Calculate weekly change using daily data ONLY
+            // Calculate weekly change: this week vs last week
             if (currentWeekStats.length > 0 && previousWeekStats.length > 0) {
-              // Only count for weekly if we have daily data (regardless of monthly data)
-              if (!hasMonthlyData) {
-                totalKeywords++; // Count for weekly calculation even if no monthly data
-              }
-
               // Calculate average rank for current week
               const currentWeekAvg =
                 currentWeekStats.reduce(
@@ -1743,10 +1702,60 @@ export const campaignsRouter = router({
               } else {
                 weeklyNeutral++; // No change
               }
+            } else {
+              // If we don't have data for either week, count as neutral
+              weeklyNeutral++;
+            }
+
+            // Calculate monthly change: this month vs last month
+            const currentMonthStats = keyword.dailyStats.filter((stat) => {
+              const statDate = new Date(stat.date);
+              return (
+                statDate.getMonth() + 1 === currentMonth &&
+                statDate.getFullYear() === currentYear
+              );
+            });
+            const previousMonthStats = keyword.dailyStats.filter((stat) => {
+              const statDate = new Date(stat.date);
+              return (
+                statDate.getMonth() + 1 === prevMonth &&
+                statDate.getFullYear() === prevYear
+              );
+            });
+
+            if (currentMonthStats.length > 0 && previousMonthStats.length > 0) {
+              // Calculate average rank for current month
+              const currentMonthAvg =
+                currentMonthStats.reduce(
+                  (sum, stat) => sum + stat.averageRank,
+                  0
+                ) / currentMonthStats.length;
+
+              // Calculate average rank for previous month
+              const previousMonthAvg =
+                previousMonthStats.reduce(
+                  (sum, stat) => sum + stat.averageRank,
+                  0
+                ) / previousMonthStats.length;
+
+              const monthlyChange = Math.floor(
+                previousMonthAvg - currentMonthAvg
+              );
+
+              if (monthlyChange > 0) {
+                monthlyUp++; // Improved position
+              } else if (monthlyChange < 0) {
+                monthlyDown++; // Worse position
+              } else {
+                monthlyNeutral++; // No change
+              }
+            } else {
+              // If we don't have data for either month, count as neutral
+              monthlyNeutral++;
             }
           }
 
-          // Calculate percentages
+          // Calculate percentages: amount improved keywords / total keywords
           const weeklyPercentage =
             totalKeywords > 0
               ? Math.floor((weeklyUp / totalKeywords) * 100)
@@ -1756,16 +1765,37 @@ export const campaignsRouter = router({
               ? Math.floor((monthlyUp / totalKeywords) * 100)
               : 0;
 
-          // Calculate overall performance (using current month data)
-          let overallGoogle = 0;
-          let overallMobile = 0;
+          // Calculate overall performance: count of improved keywords (initial rank date to today) / total keywords
+          let overallImproved = 0;
 
-          if (totalKeywords > 0) {
-            // For now, we'll use the same percentage for both Google and Mobile
-            // In a real implementation, you might have separate mobile data
-            overallGoogle = monthlyPercentage;
-            overallMobile = monthlyPercentage;
+          for (const keyword of analytics.keywords) {
+            // Get initial rank (from the keyword's initialPosition field)
+            const initialRank = keyword.initialPosition || 0;
+
+            // Get current rank (latest daily stat)
+            const latestDailyStat = keyword.dailyStats
+              .sort(
+                (a, b) =>
+                  new Date(b.date).getTime() - new Date(a.date).getTime()
+              )
+              .find((stat) => stat.averageRank > 0);
+
+            const currentRank = latestDailyStat?.averageRank || 0;
+
+            // Check if keyword improved (lower rank number is better)
+            if (
+              initialRank > 0 &&
+              currentRank > 0 &&
+              currentRank < initialRank
+            ) {
+              overallImproved++;
+            }
           }
+
+          const overallPercentage =
+            totalKeywords > 0
+              ? Math.floor((overallImproved / totalKeywords) * 100)
+              : 0;
 
           performanceMetrics.push({
             campaignId: campaign.id,
@@ -1783,10 +1813,7 @@ export const campaignsRouter = router({
               down: monthlyDown,
             },
             monthlyPercentage,
-            overallPerformance: {
-              google: overallGoogle,
-              mobile: overallMobile,
-            },
+            overallPerformance: overallPercentage,
           });
         }
 
