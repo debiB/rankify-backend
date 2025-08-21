@@ -12,7 +12,9 @@
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
+    "db:migrate:deploy": "prisma migrate deploy",
     "db:studio": "prisma studio",
+    "deploy": "npm run build && npm run db:migrate:deploy && npm run db:generate",
     "test": "echo \"Error: no test specified\" && exit 1",
     "test:cron": "node test-cron.js"
   },
