@@ -5,6 +5,7 @@ import { prisma } from '../../utils/prisma';
 import { CronService } from '../../services/cronService';
 import { AnalyticsService } from '../../services/analytics';
 import { comparePassword } from '../../utils/auth';
+import { sendTestEmail } from '../../utils/email';
 
 export const adminRouter = router({
   // Delete all search console analytics data
@@ -267,4 +268,30 @@ export const adminRouter = router({
       });
     }
   }),
+
+  // Send test email
+  sendTestEmail: adminProcedure
+    .input(
+      z.object({
+        email: z.string().email('Invalid email address'),
+      })
+    )
+    .mutation(async ({ input }) => {
+      try {
+        // Send test email using the dedicated test email function
+        const result = await sendTestEmail(input.email);
+
+        return {
+          success: true,
+          message: 'Test email sent successfully',
+          messageId: result.messageId,
+        };
+      } catch (error) {
+        console.error('Error sending test email:', error);
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: error instanceof Error ? error.message : 'Failed to send test email',
+        });
+      }
+    }),
 });
