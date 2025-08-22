@@ -1680,14 +1680,14 @@ export const campaignsRouter = router({
               // Calculate average rank for current week
               const currentWeekAvg =
                 currentWeekStats.reduce(
-                  (sum, stat) => sum + stat.averageRank,
+                  (sum, stat) => sum + (stat.averageRank || 0),
                   0
                 ) / currentWeekStats.length;
 
               // Calculate average rank for previous week
               const previousWeekAvg =
                 previousWeekStats.reduce(
-                  (sum, stat) => sum + stat.averageRank,
+                  (sum, stat) => sum + (stat.averageRank || 0),
                   0
                 ) / previousWeekStats.length;
 
@@ -1725,14 +1725,14 @@ export const campaignsRouter = router({
               // Calculate average rank for current month
               const currentMonthAvg =
                 currentMonthStats.reduce(
-                  (sum, stat) => sum + stat.averageRank,
+                  (sum, stat) => sum + (stat.averageRank || 0),
                   0
                 ) / currentMonthStats.length;
 
               // Calculate average rank for previous month
               const previousMonthAvg =
                 previousMonthStats.reduce(
-                  (sum, stat) => sum + stat.averageRank,
+                  (sum, stat) => sum + (stat.averageRank || 0),
                   0
                 ) / previousMonthStats.length;
 
@@ -1776,7 +1776,7 @@ export const campaignsRouter = router({
                 (a, b) =>
                   new Date(b.date).getTime() - new Date(a.date).getTime()
               )
-              .find((stat) => stat.averageRank > 0);
+              .find((stat) => (stat.averageRank || 0) > 0);
 
             const currentRank = latestDailyStat?.averageRank || 0;
 

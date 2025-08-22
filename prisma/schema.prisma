@@ -115,7 +115,7 @@ model SearchConsoleKeywordDailyStat {
   id                 String   @id @default(cuid())
   keywordId          String
   date               DateTime
-  averageRank        Float
+  averageRank        Float?
   searchVolume       Int
   topRankingPageUrl  String   @db.Text
   createdAt          DateTime @default(now())

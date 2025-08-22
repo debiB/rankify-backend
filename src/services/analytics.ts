@@ -45,7 +45,7 @@ export class AnalyticsService {
       const startAt = threeDaysAgo.startOf('day');
       const endAt = threeDaysAgo.endOf('day');
 
-      // Fetch and save daily keyword positions
+      // Fetch and save daily keyword positions (date/query dimensions)
       const dailyKeywordsData = await this.fetchDailyKeywordsData({
         campaign,
         googleAccount,
@@ -55,6 +55,22 @@ export class AnalyticsService {
       });
       if (dailyKeywordsData) {
         await this.saveDailyKeywordsData(dailyKeywordsData, campaign);
+      }
+
+      // Fetch and save daily keyword data with page dimensions
+      const dailyKeywordDataWithDimensions =
+        await this.fetchDailyKeywordDataWithDimensions({
+          campaign,
+          googleAccount,
+          startAt,
+          endAt,
+          waitForAllData,
+        });
+      if (dailyKeywordDataWithDimensions) {
+        await this.saveDailyKeywordDataWithDimensions(
+          dailyKeywordDataWithDimensions,
+          campaign
+        );
       }
 
       // Fetch and save daily traffic data
@@ -308,7 +324,25 @@ export class AnalyticsService {
           continue;
         }
 
-        // Fetch daily keyword data for this month
+        // First fetch daily keyword data with date/query dimensions for this month
+        const dailyKeywordsData = await this.fetchDailyKeywordsData({
+          campaign,
+          googleAccount,
+          startAt: monthStart,
+          endAt: actualEnd,
+          waitForAllData,
+        });
+
+        if (dailyKeywordsData) {
+          await this.saveHistoricalDailyKeywords(
+            dailyKeywordsData,
+            campaign,
+            monthStart,
+            actualEnd
+          );
+        }
+
+        // Then fetch daily keyword data with page dimensions for this month
         const dailyKeywordData = await this.fetchDailyKeywordDataWithDimensions(
           {
             campaign,
@@ -1677,32 +1711,32 @@ export class AnalyticsService {
           .startOf('day')
           .toDate();
 
-        // Check if daily data already exists for this specific date and keyword
-        const existingRecord =
-          await prisma.searchConsoleKeywordDailyStat.findUnique({
-            where: {
-              keywordId_date: {
-                keywordId: keywordRecord.id,
-                date: date,
-              },
+        // Upsert daily keyword stat (page dimensions - preserve existing averageRank)
+        await prisma.searchConsoleKeywordDailyStat.upsert({
+          where: {
+            keywordId_date: {
+              keywordId: keywordRecord.id,
+              date: date,
             },
-          });
-
-        if (existingRecord) {
-          continue;
-        }
-
-        // Save daily keyword stat
-        await prisma.searchConsoleKeywordDailyStat.create({
-          data: {
-            keywordId: keywordRecord.id,
-            date: date,
-            averageRank: row.position || 0,
+          },
+          update: {
             searchVolume: row.impressions || 0,
             topRankingPageUrl:
               (row.keys && row.keys.length >= 3
                 ? (row.keys[2] as string)
                 : '') || '',
+            updatedAt: new Date(),
+            // Don't update averageRank - preserve existing value
+          },
+          create: {
+            keywordId: keywordRecord.id,
+            date: date,
+            searchVolume: row.impressions || 0,
+            topRankingPageUrl:
+              (row.keys && row.keys.length >= 3
+                ? (row.keys[2] as string)
+                : '') || '',
+            // averageRank will be null for new records created with page dimensions
           },
         });
       }
@@ -2016,10 +2050,6 @@ export class AnalyticsService {
             },
           });
 
-        if (existingDailyStat) {
-          continue;
-        }
-
         // Find position data for this keyword and target date
         const positionData = dailyKeywordsData.find(
           (row) =>
@@ -2033,9 +2063,20 @@ export class AnalyticsService {
           continue;
         }
 
-        // Save daily stat to database
-        await prisma.searchConsoleKeywordDailyStat.create({
-          data: {
+        // Upsert daily stat to database (update averageRank if record exists)
+        await prisma.searchConsoleKeywordDailyStat.upsert({
+          where: {
+            keywordId_date: {
+              keywordId: keywordRecord.id,
+              date: targetDate.toDate(),
+            },
+          },
+          update: {
+            averageRank: positionData.position || 0,
+            searchVolume: positionData.impressions || 0,
+            updatedAt: new Date(),
+          },
+          create: {
             keywordId: keywordRecord.id,
             date: targetDate.toDate(),
             averageRank: positionData.position || 0,
@@ -2111,35 +2152,60 @@ export class AnalyticsService {
           .startOf('day')
           .toDate();
 
-        // Check if daily data already exists for this specific date and keyword
-        const existingDailyStat =
-          await prisma.searchConsoleKeywordDailyStat.findUnique({
+        // Determine if this is date/query data (2 keys) or page data (3 keys)
+        const isDateQueryData = row.keys && row.keys.length === 2;
+        const isPageData = row.keys && row.keys.length === 3;
+
+        if (isDateQueryData) {
+          // This is date/query data - save averageRank
+          await prisma.searchConsoleKeywordDailyStat.upsert({
             where: {
               keywordId_date: {
                 keywordId: keywordRecord.id,
                 date: date,
               },
             },
+            update: {
+              averageRank: row.position || 0,
+              searchVolume: row.impressions || 0,
+              updatedAt: new Date(),
+            },
+            create: {
+              keywordId: keywordRecord.id,
+              date: date,
+              averageRank: row.position || 0,
+              searchVolume: row.impressions || 0,
+              topRankingPageUrl: '', // We don't have this in date/query data
+            },
           });
+        } else if (isPageData) {
+          // This is page data - save topRankingPageUrl
+          const pageUrl =
+            (row.keys && row.keys.length >= 3 ? (row.keys[2] as string) : '') ||
+            '';
 
-        if (existingDailyStat) {
-          continue;
+          await prisma.searchConsoleKeywordDailyStat.upsert({
+            where: {
+              keywordId_date: {
+                keywordId: keywordRecord.id,
+                date: date,
+              },
+            },
+            update: {
+              searchVolume: row.impressions || 0,
+              topRankingPageUrl: pageUrl,
+              updatedAt: new Date(),
+              // Don't update averageRank - preserve existing value
+            },
+            create: {
+              keywordId: keywordRecord.id,
+              date: date,
+              searchVolume: row.impressions || 0,
+              topRankingPageUrl: pageUrl,
+              // averageRank will be null for new records created with page dimensions
+            },
+          });
         }
-
-        // Save daily stat to database
-        const pageUrl =
-          (row.keys && row.keys.length >= 3 ? (row.keys[2] as string) : '') ||
-          '';
-
-        await prisma.searchConsoleKeywordDailyStat.create({
-          data: {
-            keywordId: keywordRecord.id,
-            date: date,
-            averageRank: row.position || 0,
-            searchVolume: row.impressions || 0,
-            topRankingPageUrl: pageUrl,
-          },
-        });
       }
     } catch (error) {
       console.error('Error saving historical daily keywords data:', error);
@@ -2302,8 +2368,17 @@ export class AnalyticsService {
         if (keyword.dailyStats.length < daysInMonth) {
           return false;
         }
-      }
 
+        // Check if all records have complete data (both averageRank and topRankingPageUrl)
+        for (const dailyStat of keyword.dailyStats) {
+          if (
+            dailyStat.averageRank === null &&
+            dailyStat.topRankingPageUrl === ''
+          ) {
+            return false;
+          }
+        }
+      }
       return true;
     } catch (error) {
       console.error('Error checking month completeness:', error);
