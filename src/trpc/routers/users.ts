@@ -252,4 +252,65 @@ export const usersRouter = router({
 
       return user;
     }),
+
+  resetUserPassword: adminProcedure
+    .input(
+      z.object({
+        userId: z.string(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      // Get the user to reset password for
+      const user = await prisma.user.findUnique({
+        where: { id: input.userId },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          role: true,
+          status: true,
+        },
+      });
+
+      if (!user) {
+        throw new Error('User not found');
+      }
+
+      // Generate a temporary password
+      const tempPassword =
+        Math.random().toString(36).slice(-8) +
+        Math.random().toString(36).slice(-8);
+      const hashedPassword = await hashPassword(tempPassword);
+
+      // Update the user's password
+      await prisma.user.update({
+        where: { id: input.userId },
+        data: {
+          password: hashedPassword,
+          hasChangedPassword: false, // Reset this flag so user must change password
+        },
+      });
+
+      // Send email with temporary password
+      try {
+        await sendTemporaryPassword(
+          user.email,
+          user.name || 'User',
+          tempPassword
+        );
+      } catch (error) {
+        console.error('Failed to send email:', error);
+        // Don't fail the password reset if email fails
+      }
+
+      return {
+        success: true,
+        tempPassword,
+        user: {
+          id: user.id,
+          email: user.email,
+          name: user.name,
+        },
+      };
+    }),
 });
