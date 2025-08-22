@@ -1736,7 +1736,7 @@ export class AnalyticsService {
               (row.keys && row.keys.length >= 3
                 ? (row.keys[2] as string)
                 : '') || '',
-            // averageRank will be null for new records created with page dimensions
+            averageRank: null, // Explicitly set to null for new records created with page dimensions
           },
         });
       }
@@ -2202,7 +2202,7 @@ export class AnalyticsService {
               date: date,
               searchVolume: row.impressions || 0,
               topRankingPageUrl: pageUrl,
-              // averageRank will be null for new records created with page dimensions
+              averageRank: null, // Explicitly set to null for new records created with page dimensions
             },
           });
         }
