@@ -632,6 +632,11 @@ export class AnalyticsService {
     }
   }
 
+  /**
+   * Fetch top ranking pages for keywords
+   * This method follows Google Search Console's dimensions and aggregation methodology
+   * by using date, query, and page dimensions and selecting the top page by impressions
+   */
   private async fetchTopRankingPages({
     campaign,
     googleAccount,
@@ -648,61 +653,71 @@ export class AnalyticsService {
     keywords: string[];
   }): Promise<Record<string, { page: string; impressions: number }> | null> {
     try {
+      // Fetch data with date, query and page dimensions
+      // This respects GSC's dimensions requirement
       const topRankingPageAnalytics = await searchConsoleService.getAnalytics({
         campaign,
         googleAccount,
         waitForAllData,
         startAt,
         endAt,
-        dimensions: ['query', 'page'],
+        dimensions: ['date', 'query', 'page'],
       });
       if (!topRankingPageAnalytics) {
         return null;
       }
 
+      // Filter to only include our target keywords
       const filteredAnalytics = topRankingPageAnalytics.filter(({ keys }) =>
-        keywords.includes(keys?.[0] as string)
+        keys && keys.length >= 3 && keywords.includes(keys[1] as string)
       );
 
-      // Group by keyword
+      // Group by keyword and aggregate impressions by page across all dates
       const groupedAnalytics = filteredAnalytics.reduce(
         (acc, { keys, ...rest }) => {
-          const keyword = keys?.[0] as string;
-          const page = keys?.[1] as string;
+          if (!keys || keys.length < 3) return acc;
+          
+          const keyword = keys[1] as string;
+          const page = keys[2] as string;
+          
           if (!acc[keyword]) {
-            acc[keyword] = [];
+            acc[keyword] = {};
           }
-          acc[keyword].push({
-            impressions: rest.impressions ?? 0,
-            page,
-          });
+          
+          if (!acc[keyword][page]) {
+            acc[keyword][page] = 0;
+          }
+          
+          // Aggregate impressions for each page across all dates
+          acc[keyword][page] += rest.impressions ?? 0;
+          
           return acc;
         },
-        {} as Record<string, { page: string; impressions: number }[]>
+        {} as Record<string, Record<string, number>>
       );
 
-      // Keep only the top page by impressions and discard the rest for each keyword
-      const keywordsTopPages = Object.entries(groupedAnalytics).map(
-        ([keyword, positions]) => ({
-          keyword,
-          page: positions.sort((a, b) => b.impressions - a.impressions)?.[0]
-            ?.page,
-          impressions: positions.sort(
-            (a, b) => b.impressions - a.impressions
-          )?.[0]?.impressions,
-        })
-      );
+      // Find the top page by impressions for each keyword
+      const keywordsTopPages: Record<string, { page: string; impressions: number }> = {};
+      
+      Object.entries(groupedAnalytics).forEach(([keyword, pages]) => {
+        let topPage = '';
+        let maxImpressions = 0;
+        
+        // Find the page with the most impressions
+        Object.entries(pages).forEach(([page, impressions]) => {
+          if (impressions > maxImpressions) {
+            maxImpressions = impressions;
+            topPage = page;
+          }
+        });
+        
+        keywordsTopPages[keyword] = {
+          page: topPage,
+          impressions: maxImpressions
+        };
+      });
 
-      // Change the structure of the data to be keyword: { page: string, impressions: number }
-      const groupedKeywordsTopPages = keywordsTopPages.reduce(
-        (acc, { keyword, page, impressions }) => {
-          acc[keyword] = { page, impressions };
-          return acc;
-        },
-        {} as Record<string, { page: string; impressions: number }>
-      );
-
-      return groupedKeywordsTopPages;
+      return keywordsTopPages;
     } catch (error) {
       console.error('Error fetching top ranking page analytics:', error);
       return null;
@@ -1397,6 +1412,10 @@ export class AnalyticsService {
   /**
    * Fetch daily keyword data with date and query dimensions
    */
+  /**
+   * Fetch daily keyword data with dimensions (date, query, page)
+   * This method respects Google Search Console's dimensions and aggregation methodology
+   */
   private async fetchDailyKeywordDataWithDimensions({
     campaign,
     googleAccount,
@@ -1418,6 +1437,7 @@ export class AnalyticsService {
       }
 
       // Fetch data with date, query, and page dimensions
+      // This respects GSC's dimensions requirement
       const analytics = await searchConsoleService.getAnalytics({
         campaign,
         googleAccount,
@@ -1440,6 +1460,7 @@ export class AnalyticsService {
       });
 
       // Group by date and query, then aggregate to get the page with most impressions
+      // This follows GSC's methodology for selecting top pages by impressions
       const aggregatedData =
         this.aggregateDataByDateAndQuery(filteredAnalytics);
 
@@ -1455,6 +1476,7 @@ export class AnalyticsService {
 
   /**
    * Aggregate data by date and query, selecting the page with most impressions for each combination
+   * This follows Google Search Console's aggregation methodology
    */
   private aggregateDataByDateAndQuery(
     analytics: webmasters_v3.Schema$ApiDataRow[]
@@ -1477,26 +1499,46 @@ export class AnalyticsService {
     });
 
     // Aggregate each group to get the page with most impressions
+    // and follow GSC's aggregation methodology
     const aggregatedData: webmasters_v3.Schema$ApiDataRow[] = [];
 
     Object.entries(groupedData).forEach(([key, rows]) => {
       if (rows.length === 0) return;
 
-      // Find the row with the most impressions
+      // Find the row with the most impressions (top page)
       const bestRow = rows.reduce((best, current) => {
         const bestImpressions = best.impressions || 0;
         const currentImpressions = current.impressions || 0;
         return currentImpressions > bestImpressions ? current : best;
       });
 
-      // Create aggregated row with the best page URL
+      // Calculate total impressions across all pages for this date and query
+      const totalImpressions = rows.reduce(
+        (sum, row) => sum + (row.impressions || 0),
+        0
+      );
+
+      // Calculate weighted position (GSC methodology)
+      // Position is weighted by impressions across all pages
+      const weightedPosition = rows.reduce(
+        (sum, row) => sum + (row.position || 0) * (row.impressions || 0),
+        0
+      );
+
+      // Calculate total clicks across all pages for this date and query
+      const totalClicks = rows.reduce(
+        (sum, row) => sum + (row.clicks || 0),
+        0
+      );
+
+      // Create aggregated row with the best page URL and GSC aggregation methodology
       const [date, query] = key.split('_');
       const aggregatedRow: webmasters_v3.Schema$ApiDataRow = {
-        keys: [date, query, bestRow.keys?.[2] || ''], // date, query, best page URL
-        clicks: bestRow.clicks || 0,
-        impressions: bestRow.impressions || 0,
-        ctr: bestRow.ctr || 0,
-        position: bestRow.position || 0,
+        keys: [date, query, bestRow.keys?.[2] || ''], // date, query, best page URL (highest impressions)
+        clicks: totalClicks, // Sum of clicks across all pages
+        impressions: totalImpressions, // Sum of impressions across all pages
+        ctr: totalImpressions > 0 ? totalClicks / totalImpressions : 0, // Recalculated CTR
+        position: totalImpressions > 0 ? weightedPosition / totalImpressions : 0, // Weighted average position
       };
 
       aggregatedData.push(aggregatedRow);
@@ -1654,6 +1696,8 @@ export class AnalyticsService {
 
   /**
    * Save daily keyword data with dimensions to database
+   * This method saves data following Google Search Console's aggregation methodology
+   * and selects the top page by impressions for each keyword
    */
   private async saveDailyKeywordDataWithDimensions(
     dailyKeywordData: webmasters_v3.Schema$ApiDataRow[],
@@ -1678,10 +1722,11 @@ export class AnalyticsService {
 
       // Process each row of data
       for (const row of dailyKeywordData) {
-        if (!row.keys || row.keys.length < 2) continue;
+        if (!row.keys || row.keys.length < 3) continue; // Must have date, query, and page
 
         const dateString = row.keys[0];
         const query = row.keys[1];
+        const topPageUrl = row.keys[2]; // This is now the top page by impressions from aggregateDataByDateAndQuery
 
         // Only process data for our target keywords
         if (!keywords.includes(query)) continue;
@@ -1711,7 +1756,8 @@ export class AnalyticsService {
           .startOf('day')
           .toDate();
 
-        // Upsert daily keyword stat (page dimensions - preserve existing averageRank)
+        // Upsert daily keyword stat with both averageRank and topRankingPageUrl
+        // The position value is now calculated using GSC's weighted average methodology
         await prisma.searchConsoleKeywordDailyStat.upsert({
           where: {
             keywordId_date: {
@@ -1720,23 +1766,17 @@ export class AnalyticsService {
             },
           },
           update: {
-            searchVolume: row.impressions || 0,
-            topRankingPageUrl:
-              (row.keys && row.keys.length >= 3
-                ? (row.keys[2] as string)
-                : '') || '',
+            searchVolume: row.impressions || 0, // Total impressions across all pages
+            averageRank: row.position || 0, // Weighted average position across all pages
+            topRankingPageUrl: topPageUrl || '', // Top page by impressions
             updatedAt: new Date(),
-            // Don't update averageRank - preserve existing value
           },
           create: {
             keywordId: keywordRecord.id,
             date: date,
-            searchVolume: row.impressions || 0,
-            topRankingPageUrl:
-              (row.keys && row.keys.length >= 3
-                ? (row.keys[2] as string)
-                : '') || '',
-            averageRank: null, // Explicitly set to null for new records created with page dimensions
+            searchVolume: row.impressions || 0, // Total impressions across all pages
+            averageRank: row.position || 0, // Weighted average position across all pages
+            topRankingPageUrl: topPageUrl || '', // Top page by impressions
           },
         });
       }
@@ -1954,13 +1994,14 @@ export class AnalyticsService {
         return null;
       }
 
-      // Use Search Console API to fetch daily data with date and query dimensions
+      // Use Search Console API to fetch daily data with date, query, and page dimensions
+      // This respects GSC's dimensions requirement
       const analytics = await searchConsoleService.getAnalytics({
         campaign,
         googleAccount,
         startAt: startAt,
         endAt: endAt,
-        dimensions: ['date', 'query'],
+        dimensions: ['date', 'query', 'page'],
       });
 
       if (!analytics) {
@@ -1969,25 +2010,18 @@ export class AnalyticsService {
 
       // Process the analytics data to match our expected format
       // We need to handle multiple dates per keyword, so we'll use an array
-      const processedData: webmasters_v3.Schema$ApiDataRow[] = [];
-
-      analytics.forEach((row: webmasters_v3.Schema$ApiDataRow) => {
-        if (row.keys && row.keys.length >= 2) {
-          const date = row.keys[0];
+      // Now we're using the aggregateDataByDateAndQuery method to follow GSC's methodology
+      const filteredAnalytics = analytics.filter((row) => {
+        if (row.keys && row.keys.length >= 3) {
           const query = row.keys[1];
-
-          // Only include data for our target keywords
-          if (keywords.includes(query)) {
-            processedData.push({
-              keys: [date, query],
-              clicks: row.clicks || 0,
-              impressions: row.impressions || 0,
-              ctr: row.ctr || 0,
-              position: row.position || 0,
-            });
-          }
+          return keywords.includes(query);
         }
+        return false;
       });
+
+      // Group by date and query, then aggregate to get the page with most impressions
+      // This follows GSC's methodology for selecting top pages by impressions
+      const processedData = this.aggregateDataByDateAndQuery(filteredAnalytics);
 
       return processedData;
     } catch (error) {
@@ -2051,10 +2085,11 @@ export class AnalyticsService {
           });
 
         // Find position data for this keyword and target date
+        // Now we expect data to have date, query, and page dimensions
         const positionData = dailyKeywordsData.find(
           (row) =>
             row.keys &&
-            row.keys.length >= 2 &&
+            row.keys.length >= 3 &&
             row.keys[0] === targetDateString &&
             row.keys[1] === trimmedKeyword
         );
@@ -2063,7 +2098,9 @@ export class AnalyticsService {
           continue;
         }
 
-        // Upsert daily stat to database (update averageRank if record exists)
+        const topPageUrl = positionData.keys?.[2] || '';
+
+        // Upsert daily stat to database with both averageRank and topRankingPageUrl
         await prisma.searchConsoleKeywordDailyStat.upsert({
           where: {
             keywordId_date: {
@@ -2072,16 +2109,17 @@ export class AnalyticsService {
             },
           },
           update: {
-            averageRank: positionData.position || 0,
-            searchVolume: positionData.impressions || 0,
+            averageRank: positionData.position || 0, // Weighted average position across all pages
+            searchVolume: positionData.impressions || 0, // Total impressions across all pages
+            topRankingPageUrl: topPageUrl, // Top page by impressions
             updatedAt: new Date(),
           },
           create: {
             keywordId: keywordRecord.id,
             date: targetDate.toDate(),
-            averageRank: positionData.position || 0,
-            searchVolume: positionData.impressions || 0,
-            topRankingPageUrl: '', // We don't have this in daily data
+            averageRank: positionData.position || 0, // Weighted average position across all pages
+            searchVolume: positionData.impressions || 0, // Total impressions across all pages
+            topRankingPageUrl: topPageUrl, // Top page by impressions
           },
         });
       }
@@ -2152,12 +2190,12 @@ export class AnalyticsService {
           .startOf('day')
           .toDate();
 
-        // Determine if this is date/query data (2 keys) or page data (3 keys)
-        const isDateQueryData = row.keys && row.keys.length === 2;
-        const isPageData = row.keys && row.keys.length === 3;
-
-        if (isDateQueryData) {
-          // This is date/query data - save averageRank
+        // We now expect all data to have date, query, and page dimensions
+        // The data has already been aggregated using GSC's methodology in aggregateDataByDateAndQuery
+        if (row.keys && row.keys.length >= 3) {
+          const topPageUrl = row.keys[2]; // Top page by impressions
+          
+          // Save both averageRank and topRankingPageUrl in one operation
           await prisma.searchConsoleKeywordDailyStat.upsert({
             where: {
               keywordId_date: {
@@ -2166,43 +2204,17 @@ export class AnalyticsService {
               },
             },
             update: {
-              averageRank: row.position || 0,
-              searchVolume: row.impressions || 0,
+              averageRank: row.position || 0, // Weighted average position across all pages
+              searchVolume: row.impressions || 0, // Total impressions across all pages
+              topRankingPageUrl: topPageUrl || '', // Top page by impressions
               updatedAt: new Date(),
             },
             create: {
               keywordId: keywordRecord.id,
               date: date,
-              averageRank: row.position || 0,
-              searchVolume: row.impressions || 0,
-              topRankingPageUrl: '', // We don't have this in date/query data
-            },
-          });
-        } else if (isPageData) {
-          // This is page data - save topRankingPageUrl
-          const pageUrl =
-            (row.keys && row.keys.length >= 3 ? (row.keys[2] as string) : '') ||
-            '';
-
-          await prisma.searchConsoleKeywordDailyStat.upsert({
-            where: {
-              keywordId_date: {
-                keywordId: keywordRecord.id,
-                date: date,
-              },
-            },
-            update: {
-              searchVolume: row.impressions || 0,
-              topRankingPageUrl: pageUrl,
-              updatedAt: new Date(),
-              // Don't update averageRank - preserve existing value
-            },
-            create: {
-              keywordId: keywordRecord.id,
-              date: date,
-              searchVolume: row.impressions || 0,
-              topRankingPageUrl: pageUrl,
-              averageRank: null, // Explicitly set to null for new records created with page dimensions
+              averageRank: row.position || 0, // Weighted average position across all pages
+              searchVolume: row.impressions || 0, // Total impressions across all pages
+              topRankingPageUrl: topPageUrl || '', // Top page by impressions
             },
           });
         }

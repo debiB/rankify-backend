@@ -771,6 +771,8 @@ export const campaignsRouter = router({
     }),
 
   // Get analytics data for a campaign
+  // This endpoint fetches both keyword data and top-ranking page data together
+  // The top-ranking page is determined by the page with the highest impressions for each keyword
   getCampaignAnalytics: protectedProcedure
     .input(
       z.object({
@@ -779,6 +781,7 @@ export const campaignsRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
+      // Modified to fetch both keyword data and top-ranking page data together
       try {
         // Get the campaign
         const campaign = await prisma.campaign.findUnique({
@@ -1249,6 +1252,9 @@ export const campaignsRouter = router({
               searchVolume = 0;
             }
 
+            // Ensure we always return the top-ranking page data along with keyword data
+            // The topPageLink is derived from the topRankingPageUrl which is determined by the page with the highest impressions
+            // This ensures that for each keyword, we return both the keyword data and its corresponding top-ranking page
             return {
               id: keyword.id,
               keyword: keyword.keyword,
@@ -1258,6 +1264,7 @@ export const campaignsRouter = router({
               overallChange,
               position: currentStat?.averageRank || 0,
               searchVolume: searchVolume,
+              // Process and return the top-ranking page URL for this keyword
               topPageLink: (() => {
                 try {
                   const url = currentStat?.topRankingPageUrl || '';
@@ -1271,6 +1278,8 @@ export const campaignsRouter = router({
           } catch (error) {
             console.error('Error processing keyword:', keyword.keyword, error);
             // Return a default structure for this keyword
+            // Even in error cases, we maintain the structure that includes topPageLink
+            // This ensures consistent data structure for the frontend
             return {
               id: keyword.id,
               keyword: keyword.keyword,
@@ -1280,7 +1289,7 @@ export const campaignsRouter = router({
               overallChange: 0,
               position: 0,
               searchVolume: 0,
-              topPageLink: '',
+              topPageLink: '', // Empty string for top page link in error cases
             };
           }
         });
