@@ -13,6 +13,28 @@ export interface SearchConsoleSite {
   permissionLevel: string;
 }
 
+/**
+ * Service for interacting with Google Search Console API
+ * 
+ * Implementation details:
+ * 
+ * 1. Date Range Logic:
+ *    - Current month: Fetches data from the first day of the current month up to today
+ *    - Previous months: Fetches data for the last 7 days of the month only
+ *    - This optimizes data retrieval while maintaining relevant insights
+ * 
+ * 2. Exact URL Matching:
+ *    - Only includes rows where the page URL exactly matches the top-ranking page for the keyword
+ *    - Implemented using dimensionFilterGroups with 'equals' operator
+ *    - This ensures consistent tracking of the primary landing page for each keyword
+ * 
+ * 3. Aggregation Logic:
+ *    - Maintains Google Search Console methodology for aggregating metrics
+ *    - For each keyword, selects the page with the highest impressions
+ *    - Calculates weighted position based on impressions
+ *    - Sums clicks and impressions across matching pages
+ *    - Recalculates CTR based on aggregated metrics
+ */
 export class SearchConsoleService {
   private oauth2Client: any;
 
@@ -123,6 +145,23 @@ export class SearchConsoleService {
     }
   }
 
+  /**
+   * Get analytics data from Google Search Console
+   * 
+   * Date range logic:
+   * - Current month: Fetch data from the first day of the current month up to today
+   * - Previous months: Fetch data for the last 7 days only
+   * 
+   * @param campaign The campaign to fetch data for
+   * @param googleAccount The Google account to use for authentication
+   * @param waitForAllData Whether to wait for all data to be fetched (retry on quota errors)
+   * @param startAt Optional start date override
+   * @param endAt Optional end date override
+   * @param dimensions The dimensions to fetch data for
+   * @param exactUrlMatch Whether to match exact URLs only (defaults to false)
+   * @param topRankingPageUrl The top ranking page URL to filter by (required if exactUrlMatch is true)
+   * @returns The analytics data or null if an error occurred
+   */
   async getAnalytics({
     campaign,
     googleAccount,
@@ -130,6 +169,8 @@ export class SearchConsoleService {
     startAt,
     endAt,
     dimensions,
+    exactUrlMatch = false,
+    topRankingPageUrl,
   }: {
     campaign: Campaign;
     googleAccount: GoogleAccount;
@@ -137,6 +178,8 @@ export class SearchConsoleService {
     startAt?: moment.Moment;
     endAt?: moment.Moment;
     dimensions?: webmasters_v3.Schema$SearchAnalyticsQueryRequest['dimensions'];
+    exactUrlMatch?: boolean;
+    topRankingPageUrl?: string;
   }): Promise<webmasters_v3.Schema$ApiDataRow[] | null> {
     try {
       if (!googleAccount) {
@@ -154,40 +197,75 @@ export class SearchConsoleService {
       let startRow = 0;
       let retryCount = 0;
 
+      // Calculate date ranges based on new requirements
+      // If startAt and endAt are provided, use them as overrides
+      // Otherwise, apply the new date range logic
+      let startDate: string;
+      let endDate: string;
+      
+      if (startAt && endAt) {
+        // Use provided date range (override)
+        startDate = startAt
+          .clone()
+          .startOf('day') // Use startOf to include full day
+          .tz('America/Los_Angeles')
+          .format('YYYY-MM-DD');
+        endDate = endAt
+          .clone()
+          .endOf('day')
+          .tz('America/Los_Angeles')
+          .format('YYYY-MM-DD');
+      } else {
+        // Apply new date range logic
+        const today = moment().endOf('day').tz('America/Los_Angeles');
+        const currentMonth = today.clone().startOf('month');
+        const isCurrentMonth = !startAt || (startAt && startAt.isSame(currentMonth, 'month'));
+        
+        if (isCurrentMonth) {
+          // Current month: Fetch from first day of current month to today
+          startDate = currentMonth.format('YYYY-MM-DD');
+          endDate = today.format('YYYY-MM-DD');
+        } else {
+          // Previous months: Fetch last 7 days only
+          const endOfMonth = startAt ? startAt.clone().endOf('month') : today.clone().subtract(1, 'month').endOf('month');
+          startDate = endOfMonth.clone().subtract(6, 'days').format('YYYY-MM-DD'); // 7 days including end date
+          endDate = endOfMonth.format('YYYY-MM-DD');
+        }
+      }
+      
+      console.log(`Fetching GSC data from ${startDate} to ${endDate}`);
+      
       // Fetch data in chunks
       while (true) {
         try {
-          const startDate = startAt
-            ? startAt
-                .clone()
-                .endOf('day')
-                .tz('America/Los_Angeles')
-                .format('YYYY-MM-DD')
-            : moment()
-                .endOf('day')
-                .tz('America/Los_Angeles')
-                .subtract(1, 'month')
-                .format('YYYY-MM-DD');
-          const endDate = endAt
-            ? endAt
-                .clone()
-                .endOf('day')
-                .tz('America/Los_Angeles')
-                .format('YYYY-MM-DD')
-            : moment()
-                .endOf('day')
-                .tz('America/Los_Angeles')
-                .format('YYYY-MM-DD');
 
+          // Prepare request body
+          const requestBody: webmasters_v3.Schema$SearchAnalyticsQueryRequest = {
+            startDate, // Pacific time
+            endDate, // Pacific time
+            dimensions,
+            startRow,
+            rowLimit: MAX_SEARCH_CONSOLE_ROWS,
+          };
+          
+          // Add filter for exact URL matching if requested
+          if (exactUrlMatch && topRankingPageUrl && dimensions?.includes('page')) {
+            requestBody.dimensionFilterGroups = [
+              {
+                filters: [
+                  {
+                    dimension: 'page',
+                    operator: 'equals',
+                    expression: topRankingPageUrl
+                  }
+                ]
+              }
+            ];
+          }
+          
           const response = await webmasters.searchanalytics.query({
             siteUrl: campaign.searchConsoleSite,
-            requestBody: {
-              startDate, // Pacific time
-              endDate, // Pacific time
-              dimensions,
-              startRow,
-              rowLimit: MAX_SEARCH_CONSOLE_ROWS,
-            },
+            requestBody,
           });
 
           if (

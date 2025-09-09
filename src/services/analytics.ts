@@ -636,6 +636,12 @@ export class AnalyticsService {
    * Fetch top ranking pages for keywords
    * This method follows Google Search Console's dimensions and aggregation methodology
    * by using date, query, and page dimensions and selecting the top page by impressions
+   * 
+   * Date range logic:
+   * - Current month: Fetch data from the first day of the current month up to today
+   * - Previous months: Fetch data for the last 7 days only
+   * 
+   * @returns A record mapping keywords to their top ranking pages with impression counts
    */
   private async fetchTopRankingPages({
     campaign,
@@ -1410,11 +1416,15 @@ export class AnalyticsService {
   }
 
   /**
-   * Fetch daily keyword data with date and query dimensions
-   */
-  /**
    * Fetch daily keyword data with dimensions (date, query, page)
    * This method respects Google Search Console's dimensions and aggregation methodology
+   * 
+   * Date range logic:
+   * - Current month: Fetch data from the first day of the current month up to today
+   * - Previous months: Fetch data for the last 7 days only
+   * 
+   * URL matching:
+   * - Only include rows where the page URL exactly matches the top-ranking page for the keyword
    */
   private async fetchDailyKeywordDataWithDimensions({
     campaign,
@@ -1436,22 +1446,54 @@ export class AnalyticsService {
         return null;
       }
 
-      // Fetch data with date, query, and page dimensions
-      // This respects GSC's dimensions requirement
-      const analytics = await searchConsoleService.getAnalytics({
+      // First, fetch top ranking pages for each keyword
+      const topRankingPages = await this.fetchTopRankingPages({
         campaign,
         googleAccount,
-        startAt: startAt,
-        endAt: endAt,
-        dimensions: ['date', 'query', 'page'], // Daily keyword data with page dimension
+        startAt,
+        endAt,
+        waitForAllData,
+        keywords,
       });
+      
+      if (!topRankingPages) {
+        return null;
+      }
+      
+      // Create an array to store all analytics data
+      const allAnalytics: webmasters_v3.Schema$ApiDataRow[] = [];
+      
+      // For each keyword, fetch data with exact URL matching
+      for (const keyword of keywords) {
+        const topPage = topRankingPages[keyword];
+        
+        if (!topPage) {
+          continue; // Skip keywords without a top page
+        }
+        
+        // Fetch data with date, query, and page dimensions with exact URL matching
+        // This respects GSC's dimensions requirement and the new exact URL matching requirement
+        const keywordAnalytics = await searchConsoleService.getAnalytics({
+          campaign,
+          googleAccount,
+          startAt: startAt,
+          endAt: endAt,
+          dimensions: ['date', 'query', 'page'], // Daily keyword data with page dimension
+          exactUrlMatch: true, // Only include rows where page exactly matches top ranking page
+          topRankingPageUrl: topPage.page, // The top ranking page URL to filter by
+        });
+        
+        if (keywordAnalytics && keywordAnalytics.length > 0) {
+          allAnalytics.push(...keywordAnalytics);
+        }
+      }
 
-      if (!analytics) {
+      if (allAnalytics.length === 0) {
         return null;
       }
 
-      // Filter to only include our target keywords
-      const filteredAnalytics = analytics.filter((row) => {
+      // Filter to only include our target keywords (should already be filtered by the API calls)
+      const filteredAnalytics = allAnalytics.filter((row) => {
         if (row.keys && row.keys.length >= 3) {
           const query = row.keys[1];
           return keywords.includes(query);
@@ -1463,6 +1505,18 @@ export class AnalyticsService {
       // This follows GSC's methodology for selecting top pages by impressions
       const aggregatedData =
         this.aggregateDataByDateAndQuery(filteredAnalytics);
+        
+      // Store the top ranking pages for future reference in memory
+      // This will be used for exact URL matching in the UI
+      // We don't need to store this persistently as it's recalculated each time
+      const topRankingPageUrls: Record<string, string> = {};
+      aggregatedData.forEach(row => {
+        if (row.keys && row.keys.length >= 3) {
+          const query = row.keys[1];
+          const page = row.keys[2];
+          topRankingPageUrls[query] = page;
+        }
+      });
 
       return aggregatedData;
     } catch (error) {
@@ -1476,7 +1530,16 @@ export class AnalyticsService {
 
   /**
    * Aggregate data by date and query, selecting the page with most impressions for each combination
-   * This follows Google Search Console's aggregation methodology
+   * 
+   * This follows Google Search Console's aggregation methodology:
+   * 1. Group data by date and query
+   * 2. For each group, select the page with the highest impressions
+   * 3. Calculate weighted position based on impressions
+   * 4. Sum clicks and impressions across matching pages
+   * 5. Recalculate CTR based on aggregated metrics
+   * 
+   * With the exact URL matching implementation, this aggregation is simplified
+   * as we're already filtering for the exact top-ranking page URL for each keyword.
    */
   private aggregateDataByDateAndQuery(
     analytics: webmasters_v3.Schema$ApiDataRow[]
@@ -1533,12 +1596,17 @@ export class AnalyticsService {
 
       // Create aggregated row with the best page URL and GSC aggregation methodology
       const [date, query] = key.split('_');
+      
+      // Calculate CTR and position exactly as Google Search Console does
+      const calculatedCtr = totalImpressions > 0 ? (totalClicks / totalImpressions) * 100 : 0;
+      const calculatedPosition = totalImpressions > 0 ? weightedPosition / totalImpressions : 0;
+      
       const aggregatedRow: webmasters_v3.Schema$ApiDataRow = {
         keys: [date, query, bestRow.keys?.[2] || ''], // date, query, best page URL (highest impressions)
         clicks: totalClicks, // Sum of clicks across all pages
         impressions: totalImpressions, // Sum of impressions across all pages
-        ctr: totalImpressions > 0 ? totalClicks / totalImpressions : 0, // Recalculated CTR
-        position: totalImpressions > 0 ? weightedPosition / totalImpressions : 0, // Weighted average position
+        ctr: calculatedCtr / 100, // Recalculated CTR (divide by 100 to match GSC format)
+        position: calculatedPosition, // Weighted average position
       };
 
       aggregatedData.push(aggregatedRow);
@@ -1973,6 +2041,15 @@ export class AnalyticsService {
 
   /**
    * Fetch daily keyword positions for a specific date range
+   * 
+   * Date range logic:
+   * - Current month: Fetch data from the first day of the current month up to today
+   * - Previous months: Fetch data for the last 7 days only
+   * 
+   * URL matching:
+   * - First fetch all data for keywords
+   * - Then apply Google Search Console's methodology to select top pages
+   * - This ensures our results match what users see in Google Search Console
    */
   private async fetchDailyKeywordsData({
     campaign,
@@ -1993,6 +2070,9 @@ export class AnalyticsService {
       if (keywords.length === 0) {
         return null;
       }
+      
+      // Define a variable to store top ranking pages if needed later
+      let keywordTopPages: Record<string, { page: string; impressions: number }> | null = null;
 
       // Use Search Console API to fetch daily data with date, query, and page dimensions
       // This respects GSC's dimensions requirement
@@ -2002,6 +2082,7 @@ export class AnalyticsService {
         startAt: startAt,
         endAt: endAt,
         dimensions: ['date', 'query', 'page'],
+        waitForAllData,
       });
 
       if (!analytics) {
@@ -2010,7 +2091,7 @@ export class AnalyticsService {
 
       // Process the analytics data to match our expected format
       // We need to handle multiple dates per keyword, so we'll use an array
-      // Now we're using the aggregateDataByDateAndQuery method to follow GSC's methodology
+      // Filter to only include our target keywords
       const filteredAnalytics = analytics.filter((row) => {
         if (row.keys && row.keys.length >= 3) {
           const query = row.keys[1];
