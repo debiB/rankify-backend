@@ -282,8 +282,29 @@ export class SearchConsoleService {
       account.accessToken = credentials.access_token!;
       account.refreshToken = credentials.refresh_token || account.refreshToken;
       account.expiresAt = new Date(credentials.expiry_date!);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error refreshing token:', error);
+
+      // Check if it's an invalid_grant error (refresh token is invalid)
+      if (error?.response?.data?.error === 'invalid_grant') {
+        console.log(
+          `Refresh token invalid for account ${account.email}. Marking as needing re-authentication.`
+        );
+
+        // Mark account as needing re-authentication
+        await prisma.googleAccount.update({
+          where: { id: account.id },
+          data: {
+            isActive: false,
+            // You could add a field like needsReauth: true if you want to track this specifically
+          },
+        });
+
+        throw new Error(
+          `Google account ${account.email} needs to be re-authenticated. Please reconnect your Google account.`
+        );
+      }
+
       throw new Error('Failed to refresh access token');
     }
   }
