@@ -3,6 +3,7 @@ import { router, adminProcedure } from '../context';
 import { PrismaClient } from '@prisma/client';
 import { google } from 'googleapis';
 import { searchConsoleService } from '../../services/searchConsole';
+import { TRPCError } from '@trpc/server';
 
 const prisma = new PrismaClient();
 
@@ -73,6 +74,42 @@ export const googleAccountsRouter = router({
     .mutation(async ({ input }) => {
       const { id, ...updateData } = input;
 
+      // If trying to activate account, check if refresh token is valid
+      if (updateData.isActive === true) {
+        const existingAccount = await prisma.googleAccount.findUnique({
+          where: { id },
+        });
+
+        if (!existingAccount) {
+          throw new Error('Account not found');
+        }
+
+        // Test if refresh token is valid by attempting to refresh
+        try {
+          const oauth2Client = new google.auth.OAuth2(
+            process.env.GOOGLE_CLIENT_ID,
+            process.env.GOOGLE_CLIENT_SECRET,
+            process.env.GOOGLE_REDIRECT_URI ||
+              'http://localhost:3001/auth/google/callback'
+          );
+
+          oauth2Client.setCredentials({
+            refresh_token: existingAccount.refreshToken,
+          });
+
+          // Try to refresh the token to validate it
+          await oauth2Client.refreshAccessToken();
+        } catch (error: any) {
+          // If refresh token is invalid, don't allow activation
+          if (error?.response?.data?.error === 'invalid_grant') {
+            throw new Error(
+              `Cannot activate account: Refresh token is invalid. Please reconnect your Google account first.`
+            );
+          }
+          // For other errors, still allow activation (might be temporary network issues)
+        }
+      }
+
       const account = await prisma.googleAccount.update({
         where: { id },
         data: updateData,
@@ -103,8 +140,10 @@ export const googleAccountsRouter = router({
   refreshToken: adminProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input }) => {
+      let account: any = null;
+
       try {
-        const account = await prisma.googleAccount.findUnique({
+        account = await prisma.googleAccount.findUnique({
           where: { id: input.id },
         });
 
@@ -140,8 +179,47 @@ export const googleAccountsRouter = router({
         });
 
         return { success: true, message: 'Token refreshed successfully' };
-      } catch (error) {
+      } catch (error: any) {
         console.error('Token refresh error:', error);
+
+        // Check if it's an invalid_grant error (refresh token is invalid)
+        if (error?.response?.data?.error === 'invalid_grant' && account) {
+          console.log(
+            `Refresh token invalid for account ${account.email}. Marking as needing re-authentication.`
+          );
+
+          // Mark account as needing re-authentication
+          await prisma.googleAccount.update({
+            where: { id: input.id },
+            data: {
+              isActive: false,
+            },
+          });
+
+          // Get OAuth URL for re-authentication
+          const oauth2Client = new google.auth.OAuth2(
+            process.env.GOOGLE_CLIENT_ID,
+            process.env.GOOGLE_CLIENT_SECRET,
+            process.env.GOOGLE_REDIRECT_URI ||
+              'http://localhost:3001/auth/google/callback'
+          );
+
+          const authUrl = oauth2Client.generateAuthUrl({
+            access_type: 'offline',
+            scope: [
+              'https://www.googleapis.com/auth/webmasters.readonly',
+              'https://www.googleapis.com/auth/userinfo.email',
+              'https://www.googleapis.com/auth/userinfo.profile',
+            ],
+            prompt: 'consent', // Force consent to get refresh token
+          });
+
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: `REAUTH_REQUIRED|${authUrl}|Google account ${account.email} needs to be re-authenticated.`,
+          });
+        }
+
         throw new Error('Failed to refresh token');
       }
     }),
