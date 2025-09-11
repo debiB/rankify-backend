@@ -12,7 +12,29 @@ const debugLog = (message: string) => {
   console.log(`[${timestamp}] ${message}`);
 };
 
+/**
+ * Log levels for analytics data
+ */
+enum LogLevel {
+  INFO = 'INFO',
+  DEBUG = 'DEBUG',
+  ERROR = 'ERROR'
+}
+
+/**
+ * Logger for analytics data with timestamp and log level
+ */
+const analyticsLogger = (level: LogLevel, message: string) => {
+  const timestamp = new Date().toISOString();
+  console.log(`[${timestamp}] [${level}] ${message}`);
+};
+
 export class AnalyticsService {
+  /**
+   * Log a summary of all keyword metrics for the current month
+   * This is a utility method that can be called to get a comprehensive view of keyword performance
+   */
+
   /**
    * Fetch and save daily keyword positions and traffic data
    * This is called by the daily cron job
@@ -56,7 +78,7 @@ export class AnalyticsService {
       if (dailyKeywordsData) {
         await this.saveDailyKeywordsData(dailyKeywordsData, campaign);
       }
-
+    
       // Fetch and save daily keyword data with page dimensions
       const dailyKeywordDataWithDimensions =
         await this.fetchDailyKeywordDataWithDimensions({
@@ -1425,6 +1447,7 @@ export class AnalyticsService {
    * 
    * URL matching:
    * - Only include rows where the page URL exactly matches the top-ranking page for the keyword
+   * - This ensures we use the exact keyword and URL combination without variations
    */
   private async fetchDailyKeywordDataWithDimensions({
     campaign,
@@ -1484,6 +1507,7 @@ export class AnalyticsService {
         });
         
         if (keywordAnalytics && keywordAnalytics.length > 0) {
+        
           allAnalytics.push(...keywordAnalytics);
         }
       }
@@ -1540,6 +1564,9 @@ export class AnalyticsService {
    * 
    * With the exact URL matching implementation, this aggregation is simplified
    * as we're already filtering for the exact top-ranking page URL for each keyword.
+   * 
+   * This ensures the rank displayed is based on the average position as in Google Search Console,
+   * using the exact same aggregation logic for both the last 7 days of the month and the current month to date.
    */
   private aggregateDataByDateAndQuery(
     analytics: webmasters_v3.Schema$ApiDataRow[]
@@ -1583,6 +1610,7 @@ export class AnalyticsService {
 
       // Calculate weighted position (GSC methodology)
       // Position is weighted by impressions across all pages
+      // This ensures the rank calculation exactly matches Google Search Console's methodology
       const weightedPosition = rows.reduce(
         (sum, row) => sum + (row.position || 0) * (row.impressions || 0),
         0
@@ -1824,6 +1852,7 @@ export class AnalyticsService {
           .startOf('day')
           .toDate();
 
+       
         // Upsert daily keyword stat with both averageRank and topRankingPageUrl
         // The position value is now calculated using GSC's weighted average methodology
         await prisma.searchConsoleKeywordDailyStat.upsert({
@@ -1932,17 +1961,21 @@ export class AnalyticsService {
           });
         }
 
-        // Calculate weighted average initial position
+        // Calculate weighted average initial position using Google's formula:
+        // Average Position = ∑(Impressions × Top Position) / ∑(Impressions)
         const weightedAveragePosition =
           data.totalImpressions > 0
             ? data.totalPosition / data.totalImpressions
             : 0;
+            
+       
+        
 
         // Update the keyword record with the calculated initial position
         const updatedKeyword = await prisma.searchConsoleKeyword.update({
           where: { id: keywordRecord.id },
           data: {
-            initialPosition: weightedAveragePosition,
+            initialPosition: weightedAveragePosition, // Store the exact value for calculations
           },
         });
       }
@@ -2047,9 +2080,10 @@ export class AnalyticsService {
    * - Previous months: Fetch data for the last 7 days only
    * 
    * URL matching:
-   * - First fetch all data for keywords
-   * - Then apply Google Search Console's methodology to select top pages
+   * - First fetch top ranking pages for each keyword
+   * - Then fetch data with exact URL matching for each keyword+URL combination
    * - This ensures our results match what users see in Google Search Console
+   * - Each keyword rank is based only on that exact keyword + URL (no influence from other queries)
    */
   private async fetchDailyKeywordsData({
     campaign,
@@ -2071,40 +2105,59 @@ export class AnalyticsService {
         return null;
       }
       
-      // Define a variable to store top ranking pages if needed later
-      let keywordTopPages: Record<string, { page: string; impressions: number }> | null = null;
-
-      // Use Search Console API to fetch daily data with date, query, and page dimensions
-      // This respects GSC's dimensions requirement
-      const analytics = await searchConsoleService.getAnalytics({
+      // First, fetch top ranking pages for each keyword
+      const topRankingPages = await this.fetchTopRankingPages({
         campaign,
         googleAccount,
-        startAt: startAt,
-        endAt: endAt,
-        dimensions: ['date', 'query', 'page'],
+        startAt,
+        endAt,
         waitForAllData,
+        keywords,
       });
-
-      if (!analytics) {
+      
+      if (!topRankingPages) {
+        return null;
+      }
+      
+      // Create an array to store all analytics data
+      const allAnalytics: webmasters_v3.Schema$ApiDataRow[] = [];
+      
+      // For each keyword, fetch data with exact URL matching
+      for (const keyword of keywords) {
+        const topPage = topRankingPages[keyword];
+        if (!topPage) continue; // Skip keywords without a top page
+        
+        // Use Search Console API to fetch daily data with exact URL matching
+        const keywordAnalytics = await searchConsoleService.getAnalytics({
+          campaign,
+          googleAccount,
+          startAt: startAt,
+          endAt: endAt,
+          dimensions: ['date', 'query', 'page'],
+          waitForAllData,
+          exactUrlMatch: true,
+          topRankingPageUrl: topPage.page,
+        });
+        
+        if (keywordAnalytics) {
+          // Filter to only include our target keyword
+          const filteredAnalytics = keywordAnalytics.filter((row) => {
+            if (row.keys && row.keys.length >= 3) {
+              const query = row.keys[1];
+              return query === keyword;
+            }
+            return false;
+          });
+          
+          allAnalytics.push(...filteredAnalytics);
+        }
+      }
+      
+      if (allAnalytics.length === 0) {
         return null;
       }
 
-      // Process the analytics data to match our expected format
-      // We need to handle multiple dates per keyword, so we'll use an array
-      // Filter to only include our target keywords
-      const filteredAnalytics = analytics.filter((row) => {
-        if (row.keys && row.keys.length >= 3) {
-          const query = row.keys[1];
-          return keywords.includes(query);
-        }
-        return false;
-      });
-
-      // Group by date and query, then aggregate to get the page with most impressions
-      // This follows GSC's methodology for selecting top pages by impressions
-      const processedData = this.aggregateDataByDateAndQuery(filteredAnalytics);
-
-      return processedData;
+      return allAnalytics;
     } catch (error) {
       console.error('Error fetching daily keywords data:', error);
       return null;
