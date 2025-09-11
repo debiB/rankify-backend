@@ -207,6 +207,7 @@ export const googleAccountsRouter = router({
           const authUrl = oauth2Client.generateAuthUrl({
             access_type: 'offline',
             scope: [
+              'https://www.googleapis.com/auth/webmasters',
               'https://www.googleapis.com/auth/webmasters.readonly',
               'https://www.googleapis.com/auth/userinfo.email',
               'https://www.googleapis.com/auth/userinfo.profile',
