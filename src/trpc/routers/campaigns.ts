@@ -116,26 +116,31 @@ async function handleKeywordChanges(
           } added keywords: ${addedKeywords.join(', ')}`
         );
 
-        try {
-          // Trigger analytics fetch for the new keywords
-          console.log(`📊 Starting fetchDailySiteTraffic...`);
-          await analyticsService.fetchDailySiteTraffic({
-            campaignId: newCampaign.id,
-            waitForAllData: true,
-          });
-          console.log(`✅ Completed fetchDailySiteTraffic`);
+        // Run data fetching asynchronously without blocking the response
+        console.log(`📊 Starting background data fetch for new keywords...`);
 
-          // Also fetch daily keyword data for the new keywords
-          console.log(`🔍 Starting fetchDailyKeywordData...`);
-          await analyticsService.fetchDailyKeywordData({
-            campaignId: newCampaign.id,
-            waitForAllData: true,
-          });
-          console.log(`✅ Completed fetchDailyKeywordData`);
-        } catch (error) {
-          console.error('❌ Error fetching data for added keywords:', error);
-          throw error;
-        }
+        // Use setImmediate to run in the next tick, making it truly asynchronous
+        setImmediate(async () => {
+          try {
+            console.log(`📊 Starting fetchDailySiteTraffic...`);
+            await analyticsService.fetchDailySiteTraffic({
+              campaignId: newCampaign.id,
+              waitForAllData: true,
+            });
+            console.log(`✅ Completed fetchDailySiteTraffic`);
+
+            // Also fetch daily keyword data for the new keywords
+            console.log(`🔍 Starting fetchDailyKeywordData...`);
+            await analyticsService.fetchDailyKeywordData({
+              campaignId: newCampaign.id,
+              waitForAllData: true,
+            });
+            console.log(`✅ Completed fetchDailyKeywordData`);
+          } catch (error) {
+            console.error('❌ Error fetching data for added keywords:', error);
+            // Don't throw here since this is running asynchronously
+          }
+        });
       }
       return;
     }
@@ -171,26 +176,31 @@ async function handleKeywordChanges(
         } added keywords: ${addedKeywords.join(', ')}`
       );
 
-      try {
-        // Trigger analytics fetch for the new keywords
-        console.log(`📊 Starting fetchDailySiteTraffic...`);
-        await analyticsService.fetchDailySiteTraffic({
-          campaignId: newCampaign.id,
-          waitForAllData: true,
-        });
-        console.log(`✅ Completed fetchDailySiteTraffic`);
+      // Run data fetching asynchronously without blocking the response
+      console.log(`📊 Starting background data fetch for new keywords...`);
 
-        // Also fetch daily keyword data for the new keywords
-        console.log(`🔍 Starting fetchDailyKeywordData...`);
-        await analyticsService.fetchDailyKeywordData({
-          campaignId: newCampaign.id,
-          waitForAllData: true,
-        });
-        console.log(`✅ Completed fetchDailyKeywordData`);
-      } catch (error) {
-        console.error('❌ Error fetching data for added keywords:', error);
-        throw error;
-      }
+      // Use setImmediate to run in the next tick, making it truly asynchronous
+      setImmediate(async () => {
+        try {
+          console.log(`📊 Starting fetchDailySiteTraffic...`);
+          await analyticsService.fetchDailySiteTraffic({
+            campaignId: newCampaign.id,
+            waitForAllData: true,
+          });
+          console.log(`✅ Completed fetchDailySiteTraffic`);
+
+          // Also fetch daily keyword data for the new keywords
+          console.log(`🔍 Starting fetchDailyKeywordData...`);
+          await analyticsService.fetchDailyKeywordData({
+            campaignId: newCampaign.id,
+            waitForAllData: true,
+          });
+          console.log(`✅ Completed fetchDailyKeywordData`);
+        } catch (error) {
+          console.error('❌ Error fetching data for added keywords:', error);
+          // Don't throw here since this is running asynchronously
+        }
+      });
     }
   } catch (error) {
     console.error('Error handling keyword changes:', error);
@@ -492,9 +502,19 @@ export const campaignsRouter = router({
           },
         });
 
-        // Handle keyword changes
+        // Handle keyword changes asynchronously
         if (isKeywordsChanged) {
-          await handleKeywordChanges(existingCampaign, campaign);
+          // Run keyword changes handling asynchronously without blocking the response
+          setImmediate(async () => {
+            try {
+              await handleKeywordChanges(existingCampaign, campaign);
+            } catch (error) {
+              console.error(
+                'Error handling keyword changes asynchronously:',
+                error
+              );
+            }
+          });
         }
 
         // Trigger analytics fetch if starting date changed
@@ -1255,14 +1275,14 @@ export const campaignsRouter = router({
             // Ensure we always return the top-ranking page data along with keyword data
             // The topPageLink is derived from the topRankingPageUrl which is determined by the page with the highest impressions
             // This ensures that for each keyword, we return both the keyword data and its corresponding top-ranking page
-            
+
             // Make sure all months from the global months array are included in each keyword's monthlyData
             const allMonths = Object.keys(monthlyData).sort((a, b) => {
               const [monthA, yearA] = a.split('/').map(Number);
               const [monthB, yearB] = b.split('/').map(Number);
               return yearA - yearB || monthA - monthB;
             });
-            
+
             return {
               id: keyword.id,
               keyword: keyword.keyword,
@@ -1315,22 +1335,22 @@ export const campaignsRouter = router({
           const [monthB, yearB] = b.split('/').map(Number);
           return yearA - yearB || monthA - monthB;
         });
-        
+
         // Create a new array with keywords that have all months
-        const updatedKeywords = keywords.map(keyword => {
+        const updatedKeywords = keywords.map((keyword) => {
           // Create a copy of the keyword with all months included
           const updatedKeyword = { ...keyword };
-          
+
           // Ensure all months are included in the monthlyData
           sortedMonths.forEach((month) => {
             if (!updatedKeyword.monthlyData[month]) {
               updatedKeyword.monthlyData[month] = null;
             }
           });
-          
+
           return updatedKeyword;
         });
-        
+
         // Return the updated keywords array directly
         return {
           keywords: updatedKeywords,
@@ -1859,48 +1879,54 @@ export const campaignsRouter = router({
         });
       }
     }),
-    
-    /**
-     * Log monthly keyword metrics for a campaign
-     * This endpoint logs detailed metrics for all keywords in a campaign for the current month
-     */
-    logMonthlyKeywordMetrics: protectedProcedure
-      .input(z.object({
+
+  /**
+   * Log monthly keyword metrics for a campaign
+   * This endpoint logs detailed metrics for all keywords in a campaign for the current month
+   */
+  logMonthlyKeywordMetrics: protectedProcedure
+    .input(
+      z.object({
         campaignId: z.string(),
-      }))
-      .mutation(async ({ input, ctx }) => {
-        try {
-          const { campaignId } = input;
-          
-          // Check if campaign exists and user has access
-          const campaign = await prisma.campaign.findUnique({
-            where: { id: campaignId },
-            include: { user: true },
-          });
-          
-          if (!campaign) {
-            throw new TRPCError({
-              code: 'NOT_FOUND',
-              message: 'Campaign not found',
-            });
-          }
-          
-          // Check if user has access to this campaign
-          if (campaign.userId !== ctx.user.id && ctx.user.role !== 'ADMIN') {
-            throw new TRPCError({
-              code: 'FORBIDDEN',
-              message: 'You do not have access to this campaign',
-            });
-          }
-          
-      
-          return { success: true, message: 'Monthly keyword metrics logged successfully' };
-        } catch (error) {
-          console.error('Error in logMonthlyKeywordMetrics:', error);
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const { campaignId } = input;
+
+        // Check if campaign exists and user has access
+        const campaign = await prisma.campaign.findUnique({
+          where: { id: campaignId },
+          include: { user: true },
+        });
+
+        if (!campaign) {
           throw new TRPCError({
-            code: 'INTERNAL_SERVER_ERROR',
-            message: `Failed to log monthly keyword metrics: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            code: 'NOT_FOUND',
+            message: 'Campaign not found',
           });
         }
-      }),
+
+        // Check if user has access to this campaign
+        if (campaign.userId !== ctx.user.id && ctx.user.role !== 'ADMIN') {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'You do not have access to this campaign',
+          });
+        }
+
+        return {
+          success: true,
+          message: 'Monthly keyword metrics logged successfully',
+        };
+      } catch (error) {
+        console.error('Error in logMonthlyKeywordMetrics:', error);
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to log monthly keyword metrics: ${
+            error instanceof Error ? error.message : 'Unknown error'
+          }`,
+        });
+      }
+    }),
 });
