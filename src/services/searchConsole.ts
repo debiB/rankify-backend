@@ -23,10 +23,10 @@ export interface SearchConsoleSite {
  *    - Previous months: Fetches data for the last 7 days of the month only
  *    - This optimizes data retrieval while maintaining relevant insights
  * 
- * 2. Exact URL Matching:
- *    - Only includes rows where the page URL exactly matches the top-ranking page for the keyword
- *    - Implemented using dimensionFilterGroups with 'equals' operator
- *    - This ensures consistent tracking of the primary landing page for each keyword
+ * 2. Efficient Data Retrieval:
+ *    - Fetches data for the entire property at once rather than filtering by specific URLs
+ *    - Always includes date dimension to ensure results are broken down by date
+ *    - Reduces the number of API calls and improves performance
  * 
  * 3. Aggregation Logic:
  *    - Maintains Google Search Console methodology for aggregating metrics
@@ -158,8 +158,6 @@ export class SearchConsoleService {
    * @param startAt Optional start date override
    * @param endAt Optional end date override
    * @param dimensions The dimensions to fetch data for
-   * @param exactUrlMatch Whether to match exact URLs only (defaults to false)
-   * @param topRankingPageUrl The top ranking page URL to filter by (required if exactUrlMatch is true)
    * @returns The analytics data or null if an error occurred
    */
   async getAnalytics({
@@ -169,8 +167,8 @@ export class SearchConsoleService {
     startAt,
     endAt,
     dimensions,
-    exactUrlMatch = false,
-    topRankingPageUrl,
+    exactUrlMatch,
+    topRankingPageUrl
   }: {
     campaign: Campaign;
     googleAccount: GoogleAccount;
@@ -243,24 +241,17 @@ export class SearchConsoleService {
           const requestBody: webmasters_v3.Schema$SearchAnalyticsQueryRequest = {
             startDate, // Pacific time
             endDate, // Pacific time
-            dimensions,
             startRow,
             rowLimit: MAX_SEARCH_CONSOLE_ROWS,
           };
           
-          // Add filter for exact URL matching if requested
-          if (exactUrlMatch && topRankingPageUrl && dimensions?.includes('page')) {
-            requestBody.dimensionFilterGroups = [
-              {
-                filters: [
-                  {
-                    dimension: 'page',
-                    operator: 'equals',
-                    expression: topRankingPageUrl
-                  }
-                ]
-              }
-            ];
+          // Ensure date dimension is included to break down results by date
+          if (dimensions && !dimensions.includes('date')) {
+            requestBody.dimensions = ['date', ...dimensions];
+          } else if (!dimensions) {
+            requestBody.dimensions = ['date'];
+          } else {
+            requestBody.dimensions = dimensions;
           }
           
           const response = await webmasters.searchanalytics.query({

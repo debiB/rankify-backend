@@ -690,6 +690,8 @@ export class AnalyticsService {
         startAt,
         endAt,
         dimensions: ['date', 'query', 'page'],
+        exactUrlMatch: false, // Don't filter by exact URL match
+        topRankingPageUrl: undefined, // No specific top ranking page URL
       });
       if (!topRankingPageAnalytics) {
         return null;
@@ -775,6 +777,8 @@ export class AnalyticsService {
         startAt,
         endAt,
         dimensions: ['query'],
+        exactUrlMatch: false, // Don't filter by exact URL match
+        topRankingPageUrl: undefined, // No specific top ranking page URL
       });
 
       const filteredAnalytics = analytics?.filter(({ keys }) =>
@@ -1278,6 +1282,8 @@ export class AnalyticsService {
         startAt,
         endAt,
         dimensions: [], // No dimensions for overall site traffic
+        exactUrlMatch: false, // Don't filter by exact URL match
+        topRankingPageUrl: undefined, // No specific top ranking page URL
       });
 
       if (!analytics || analytics.length === 0) {
@@ -1342,6 +1348,8 @@ export class AnalyticsService {
         startAt,
         endAt,
         dimensions: ['date'], // Include date dimension for daily breakdown
+        exactUrlMatch: false, // Don't filter by exact URL match
+        topRankingPageUrl: undefined, // No specific top ranking page URL
       });
 
       if (!analytics || analytics.length === 0) {
@@ -1403,6 +1411,8 @@ export class AnalyticsService {
         startAt,
         endAt,
         dimensions: ['date'], // Site-wide traffic by date
+        exactUrlMatch: false, // Don't filter by exact URL match
+        topRankingPageUrl: undefined, // No specific top ranking page URL
       });
 
       if (!analytics || analytics.length === 0) {
@@ -1486,30 +1496,21 @@ export class AnalyticsService {
       // Create an array to store all analytics data
       const allAnalytics: webmasters_v3.Schema$ApiDataRow[] = [];
       
-      // For each keyword, fetch data with exact URL matching
-      for (const keyword of keywords) {
-        const topPage = topRankingPages[keyword];
+      // Fetch data for all keywords at once instead of per-URL filtering
+      // This is more efficient as it reduces the number of API calls
+      const keywordAnalytics = await searchConsoleService.getAnalytics({
+        campaign,
+        googleAccount,
+        startAt: startAt,
+        endAt: endAt,
+        dimensions: ['date', 'query', 'page'], // Include date, query and page dimensions
+        waitForAllData,
+        exactUrlMatch: false, 
+        topRankingPageUrl: undefined, // No specific top ranking page URL
+      });
         
-        if (!topPage) {
-          continue; // Skip keywords without a top page
-        }
-        
-        // Fetch data with date, query, and page dimensions with exact URL matching
-        // This respects GSC's dimensions requirement and the new exact URL matching requirement
-        const keywordAnalytics = await searchConsoleService.getAnalytics({
-          campaign,
-          googleAccount,
-          startAt: startAt,
-          endAt: endAt,
-          dimensions: ['date', 'query', 'page'], // Daily keyword data with page dimension
-          exactUrlMatch: true, // Only include rows where page exactly matches top ranking page
-          topRankingPageUrl: topPage.page, // The top ranking page URL to filter by
-        });
-        
-        if (keywordAnalytics && keywordAnalytics.length > 0) {
-        
-          allAnalytics.push(...keywordAnalytics);
-        }
+      if (keywordAnalytics && keywordAnalytics.length > 0) {
+        allAnalytics.push(...keywordAnalytics);
       }
 
       if (allAnalytics.length === 0) {
@@ -2122,35 +2123,30 @@ export class AnalyticsService {
       // Create an array to store all analytics data
       const allAnalytics: webmasters_v3.Schema$ApiDataRow[] = [];
       
-      // For each keyword, fetch data with exact URL matching
-      for (const keyword of keywords) {
-        const topPage = topRankingPages[keyword];
-        if (!topPage) continue; // Skip keywords without a top page
-        
-        // Use Search Console API to fetch daily data with exact URL matching
-        const keywordAnalytics = await searchConsoleService.getAnalytics({
-          campaign,
-          googleAccount,
-          startAt: startAt,
-          endAt: endAt,
-          dimensions: ['date', 'query', 'page'],
-          waitForAllData,
-          exactUrlMatch: true,
-          topRankingPageUrl: topPage.page,
+      // Fetch data for all keywords at once instead of per-URL filtering
+      // This is more efficient as it reduces the number of API calls
+      const keywordAnalytics = await searchConsoleService.getAnalytics({
+        campaign,
+        googleAccount,
+        startAt: startAt,
+        endAt: endAt,
+        dimensions: ['date', 'query', 'page'],
+        waitForAllData,
+        exactUrlMatch: false, // Don't filter by exact URL match
+        topRankingPageUrl: undefined, // No specific top ranking page URL
+      });
+      
+      if (keywordAnalytics) {
+        // Filter to only include our target keywords
+        const filteredAnalytics = keywordAnalytics.filter((row) => {
+          if (row.keys && row.keys.length >= 3) {
+            const query = row.keys[1];
+            return keywords.includes(query);
+          }
+          return false;
         });
         
-        if (keywordAnalytics) {
-          // Filter to only include our target keyword
-          const filteredAnalytics = keywordAnalytics.filter((row) => {
-            if (row.keys && row.keys.length >= 3) {
-              const query = row.keys[1];
-              return query === keyword;
-            }
-            return false;
-          });
-          
-          allAnalytics.push(...filteredAnalytics);
-        }
+        allAnalytics.push(...filteredAnalytics);
       }
       
       if (allAnalytics.length === 0) {
