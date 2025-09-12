@@ -90,8 +90,11 @@ const startServer = async () => {
       console.warn(
         '⚠️  SMTP connection failed. Email functionality may not work properly.'
       );
+     
     } else {
       console.log('✅ SMTP connection verified');
+     
+
     }
 
     app.listen(PORT, () => {
