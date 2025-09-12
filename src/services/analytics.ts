@@ -2512,13 +2512,14 @@ export class AnalyticsService {
       }
 
       // Check site traffic data
-      const trafficAnalytics = await prisma.searchConsoleTrafficAnalytics.findFirst({
-        where: { siteUrl: campaign.searchConsoleSite },
-        include: {
-          daily: true,
-          monthly: true,
-        },
-      });
+      const trafficAnalytics =
+        await prisma.searchConsoleTrafficAnalytics.findFirst({
+          where: { siteUrl: campaign.searchConsoleSite },
+          include: {
+            daily: true,
+            monthly: true,
+          },
+        });
 
       const siteTrafficCount = trafficAnalytics?.daily.length || 0;
 
@@ -2534,10 +2535,11 @@ export class AnalyticsService {
         },
       });
 
-      const keywordRecords = analytics?.keywords.reduce(
-        (total, keyword) => total + keyword.dailyStats.length,
-        0
-      ) || 0;
+      const keywordRecords =
+        analytics?.keywords.reduce(
+          (total, keyword) => total + keyword.dailyStats.length,
+          0
+        ) || 0;
 
       // Check monthly traffic data
       const monthlyTrafficCount = trafficAnalytics?.monthly.length || 0;

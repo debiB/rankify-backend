@@ -219,8 +219,10 @@ export const adminRouter = router({
               console.log(`Processing campaign: ${campaign.name}`);
 
               // Check what data already exists
-              const dataStatus = await analyticsService.checkCampaignDataStatus(campaign.id);
-              
+              const dataStatus = await analyticsService.checkCampaignDataStatus(
+                campaign.id
+              );
+
               console.log(`Data status for ${campaign.name}:`, {
                 siteTraffic: dataStatus.siteTrafficRecords,
                 keywords: dataStatus.keywordRecords,
@@ -232,34 +234,56 @@ export const adminRouter = router({
               let monthlyTrafficSuccess = true;
 
               // Only fetch data that doesn't exist or is incomplete
-              if (!dataStatus.hasSiteTrafficData || dataStatus.siteTrafficRecords < 10) {
-                console.log(`Fetching site traffic data for ${campaign.name}...`);
-                siteTrafficSuccess = await analyticsService.fetchDailySiteTraffic({
-                  campaignId: campaign.id,
-                  waitForAllData: true,
-                });
+              if (
+                !dataStatus.hasSiteTrafficData ||
+                dataStatus.siteTrafficRecords < 10
+              ) {
+                console.log(
+                  `Fetching site traffic data for ${campaign.name}...`
+                );
+                siteTrafficSuccess =
+                  await analyticsService.fetchDailySiteTraffic({
+                    campaignId: campaign.id,
+                    waitForAllData: true,
+                  });
               } else {
-                console.log(`Skipping site traffic fetch for ${campaign.name} - data already exists (${dataStatus.siteTrafficRecords} records)`);
+                console.log(
+                  `Skipping site traffic fetch for ${campaign.name} - data already exists (${dataStatus.siteTrafficRecords} records)`
+                );
               }
 
-              if (!dataStatus.hasKeywordData || dataStatus.keywordRecords < 10) {
+              if (
+                !dataStatus.hasKeywordData ||
+                dataStatus.keywordRecords < 10
+              ) {
                 console.log(`Fetching keyword data for ${campaign.name}...`);
-                keywordDataSuccess = await analyticsService.fetchDailyKeywordData({
-                  campaignId: campaign.id,
-                  waitForAllData: true,
-                });
+                keywordDataSuccess =
+                  await analyticsService.fetchDailyKeywordData({
+                    campaignId: campaign.id,
+                    waitForAllData: true,
+                  });
               } else {
-                console.log(`Skipping keyword data fetch for ${campaign.name} - data already exists (${dataStatus.keywordRecords} records)`);
+                console.log(
+                  `Skipping keyword data fetch for ${campaign.name} - data already exists (${dataStatus.keywordRecords} records)`
+                );
               }
 
-              if (!dataStatus.hasMonthlyTrafficData || dataStatus.monthlyTrafficRecords < 3) {
-                console.log(`Fetching monthly traffic data for ${campaign.name}...`);
-                monthlyTrafficSuccess = await analyticsService.fetchAndSaveMonthlyTrafficData({
-                  campaignId: campaign.id,
-                  waitForAllData: true,
-                });
+              if (
+                !dataStatus.hasMonthlyTrafficData ||
+                dataStatus.monthlyTrafficRecords < 3
+              ) {
+                console.log(
+                  `Fetching monthly traffic data for ${campaign.name}...`
+                );
+                monthlyTrafficSuccess =
+                  await analyticsService.fetchAndSaveMonthlyTrafficData({
+                    campaignId: campaign.id,
+                    waitForAllData: true,
+                  });
               } else {
-                console.log(`Skipping monthly traffic fetch for ${campaign.name} - data already exists (${dataStatus.monthlyTrafficRecords} records)`);
+                console.log(
+                  `Skipping monthly traffic fetch for ${campaign.name} - data already exists (${dataStatus.monthlyTrafficRecords} records)`
+                );
               }
 
               console.log(`Completed processing campaign: ${campaign.name}`);
@@ -271,9 +295,15 @@ export const adminRouter = router({
                 keywordData: keywordDataSuccess,
                 monthlyTraffic: monthlyTrafficSuccess,
                 skipped: {
-                  siteTraffic: dataStatus.hasSiteTrafficData && dataStatus.siteTrafficRecords >= 10,
-                  keywordData: dataStatus.hasKeywordData && dataStatus.keywordRecords >= 10,
-                  monthlyTraffic: dataStatus.hasMonthlyTrafficData && dataStatus.monthlyTrafficRecords >= 3,
+                  siteTraffic:
+                    dataStatus.hasSiteTrafficData &&
+                    dataStatus.siteTrafficRecords >= 10,
+                  keywordData:
+                    dataStatus.hasKeywordData &&
+                    dataStatus.keywordRecords >= 10,
+                  monthlyTraffic:
+                    dataStatus.hasMonthlyTrafficData &&
+                    dataStatus.monthlyTrafficRecords >= 3,
                 },
                 existingRecords: {
                   siteTraffic: dataStatus.siteTrafficRecords,
@@ -323,16 +353,19 @@ export const adminRouter = router({
 
       const successfulCampaigns = results.filter((r) => !r.error).length;
       const failedCampaigns = results.filter((r) => r.error).length;
-      
+
       // Calculate skipped operations
-      const totalSkipped = results.reduce((acc, r) => {
-        if (r.skipped) {
-          acc.siteTraffic += r.skipped.siteTraffic ? 1 : 0;
-          acc.keywordData += r.skipped.keywordData ? 1 : 0;
-          acc.monthlyTraffic += r.skipped.monthlyTraffic ? 1 : 0;
-        }
-        return acc;
-      }, { siteTraffic: 0, keywordData: 0, monthlyTraffic: 0 });
+      const totalSkipped = results.reduce(
+        (acc, r) => {
+          if (r.skipped) {
+            acc.siteTraffic += r.skipped.siteTraffic ? 1 : 0;
+            acc.keywordData += r.skipped.keywordData ? 1 : 0;
+            acc.monthlyTraffic += r.skipped.monthlyTraffic ? 1 : 0;
+          }
+          return acc;
+        },
+        { siteTraffic: 0, keywordData: 0, monthlyTraffic: 0 }
+      );
 
       return {
         success: true,
