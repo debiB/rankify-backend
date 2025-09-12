@@ -335,7 +335,7 @@ export class AnalyticsService {
         const isCurrentMonth = currentDate.isSame(moment(), 'month');
         let actualStart = monthStart;
         let actualEnd = monthEnd.isAfter(endDate) ? endDate : monthEnd;
-        
+
         if (!isCurrentMonth) {
           // For past months, use only the last 7 days
           actualStart = actualEnd.clone().subtract(6, 'days');
@@ -1641,7 +1641,6 @@ export class AnalyticsService {
       const calculatedPosition =
         totalImpressions > 0 ? weightedPosition / totalImpressions : 0;
 
-
       const aggregatedRow: webmasters_v3.Schema$ApiDataRow = {
         keys: [date, query, bestRow.keys?.[2] || ''], // date, query, best page URL (highest impressions)
         clicks: totalClicks, // Sum of clicks across all pages
@@ -2241,7 +2240,6 @@ export class AnalyticsService {
         }
 
         const topPageUrl = positionData.keys?.[2] || '';
-
 
         // Upsert daily stat to database with both averageRank and topRankingPageUrl
         await prisma.searchConsoleKeywordDailyStat.upsert({
