@@ -2492,6 +2492,78 @@ export class AnalyticsService {
   }
 
   /**
+   * Check what data already exists for a campaign
+   */
+  async checkCampaignDataStatus(campaignId: string): Promise<{
+    hasSiteTrafficData: boolean;
+    hasKeywordData: boolean;
+    hasMonthlyTrafficData: boolean;
+    siteTrafficRecords: number;
+    keywordRecords: number;
+    monthlyTrafficRecords: number;
+  }> {
+    try {
+      const campaign = await prisma.campaign.findUnique({
+        where: { id: campaignId },
+      });
+
+      if (!campaign) {
+        throw new Error('Campaign not found');
+      }
+
+      // Check site traffic data
+      const trafficAnalytics = await prisma.searchConsoleTrafficAnalytics.findFirst({
+        where: { siteUrl: campaign.searchConsoleSite },
+        include: {
+          daily: true,
+          monthly: true,
+        },
+      });
+
+      const siteTrafficCount = trafficAnalytics?.daily.length || 0;
+
+      // Check keyword data
+      const analytics = await prisma.searchConsoleKeywordAnalytics.findFirst({
+        where: { siteUrl: campaign.searchConsoleSite },
+        include: {
+          keywords: {
+            include: {
+              dailyStats: true,
+            },
+          },
+        },
+      });
+
+      const keywordRecords = analytics?.keywords.reduce(
+        (total, keyword) => total + keyword.dailyStats.length,
+        0
+      ) || 0;
+
+      // Check monthly traffic data
+      const monthlyTrafficCount = trafficAnalytics?.monthly.length || 0;
+
+      return {
+        hasSiteTrafficData: siteTrafficCount > 0,
+        hasKeywordData: keywordRecords > 0,
+        hasMonthlyTrafficData: monthlyTrafficCount > 0,
+        siteTrafficRecords: siteTrafficCount,
+        keywordRecords,
+        monthlyTrafficRecords: monthlyTrafficCount,
+      };
+    } catch (error) {
+      console.error('Error checking campaign data status:', error);
+      return {
+        hasSiteTrafficData: false,
+        hasKeywordData: false,
+        hasMonthlyTrafficData: false,
+        siteTrafficRecords: 0,
+        keywordRecords: 0,
+        monthlyTrafficRecords: 0,
+      };
+    }
+  }
+
+  /**
    * Check if we have complete daily data for a specific month
    */
   private async checkIfMonthHasCompleteData(
