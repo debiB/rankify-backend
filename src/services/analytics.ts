@@ -18,7 +18,7 @@ const debugLog = (message: string) => {
 enum LogLevel {
   INFO = 'INFO',
   DEBUG = 'DEBUG',
-  ERROR = 'ERROR'
+  ERROR = 'ERROR',
 }
 
 /**
@@ -78,7 +78,7 @@ export class AnalyticsService {
       if (dailyKeywordsData) {
         await this.saveDailyKeywordsData(dailyKeywordsData, campaign);
       }
-    
+
       // Fetch and save daily keyword data with page dimensions
       const dailyKeywordDataWithDimensions =
         await this.fetchDailyKeywordDataWithDimensions({
@@ -658,11 +658,11 @@ export class AnalyticsService {
    * Fetch top ranking pages for keywords
    * This method follows Google Search Console's dimensions and aggregation methodology
    * by using date, query, and page dimensions and selecting the top page by impressions
-   * 
+   *
    * Date range logic:
    * - Current month: Fetch data from the first day of the current month up to today
    * - Previous months: Fetch data for the last 7 days only
-   * 
+   *
    * @returns A record mapping keywords to their top ranking pages with impression counts
    */
   private async fetchTopRankingPages({
@@ -698,41 +698,45 @@ export class AnalyticsService {
       }
 
       // Filter to only include our target keywords
-      const filteredAnalytics = topRankingPageAnalytics.filter(({ keys }) =>
-        keys && keys.length >= 3 && keywords.includes(keys[1] as string)
+      const filteredAnalytics = topRankingPageAnalytics.filter(
+        ({ keys }) =>
+          keys && keys.length >= 3 && keywords.includes(keys[1] as string)
       );
 
       // Group by keyword and aggregate impressions by page across all dates
       const groupedAnalytics = filteredAnalytics.reduce(
         (acc, { keys, ...rest }) => {
           if (!keys || keys.length < 3) return acc;
-          
+
           const keyword = keys[1] as string;
           const page = keys[2] as string;
-          
+
           if (!acc[keyword]) {
             acc[keyword] = {};
           }
-          
+
           if (!acc[keyword][page]) {
             acc[keyword][page] = 0;
           }
-          
+
           // Aggregate impressions for each page across all dates
           acc[keyword][page] += rest.impressions ?? 0;
-          
+
           return acc;
         },
         {} as Record<string, Record<string, number>>
       );
 
       // Find the top page by impressions for each keyword
-      const keywordsTopPages: Record<string, { page: string; impressions: number }> = {};
-      
+      const keywordsTopPages: Record<
+        string,
+        { page: string; impressions: number }
+      > = {};
+
       Object.entries(groupedAnalytics).forEach(([keyword, pages]) => {
         let topPage = '';
         let maxImpressions = 0;
-        
+
         // Find the page with the most impressions
         Object.entries(pages).forEach(([page, impressions]) => {
           if (impressions > maxImpressions) {
@@ -740,10 +744,10 @@ export class AnalyticsService {
             topPage = page;
           }
         });
-        
+
         keywordsTopPages[keyword] = {
           page: topPage,
-          impressions: maxImpressions
+          impressions: maxImpressions,
         };
       });
 
@@ -1450,11 +1454,11 @@ export class AnalyticsService {
   /**
    * Fetch daily keyword data with dimensions (date, query, page)
    * This method respects Google Search Console's dimensions and aggregation methodology
-   * 
+   *
    * Date range logic:
    * - Current month: Fetch data from the first day of the current month up to today
    * - Previous months: Fetch data for the last 7 days only
-   * 
+   *
    * URL matching:
    * - Only include rows where the page URL exactly matches the top-ranking page for the keyword
    * - This ensures we use the exact keyword and URL combination without variations
@@ -1488,14 +1492,14 @@ export class AnalyticsService {
         waitForAllData,
         keywords,
       });
-      
+
       if (!topRankingPages) {
         return null;
       }
-      
+
       // Create an array to store all analytics data
       const allAnalytics: webmasters_v3.Schema$ApiDataRow[] = [];
-      
+
       // Fetch data for all keywords at once instead of per-URL filtering
       // This is more efficient as it reduces the number of API calls
       const keywordAnalytics = await searchConsoleService.getAnalytics({
@@ -1505,10 +1509,10 @@ export class AnalyticsService {
         endAt: endAt,
         dimensions: ['date', 'query', 'page'], // Include date, query and page dimensions
         waitForAllData,
-        exactUrlMatch: false, 
+        exactUrlMatch: false,
         topRankingPageUrl: undefined, // No specific top ranking page URL
       });
-        
+
       if (keywordAnalytics && keywordAnalytics.length > 0) {
         allAnalytics.push(...keywordAnalytics);
       }
@@ -1530,12 +1534,12 @@ export class AnalyticsService {
       // This follows GSC's methodology for selecting top pages by impressions
       const aggregatedData =
         this.aggregateDataByDateAndQuery(filteredAnalytics);
-        
+
       // Store the top ranking pages for future reference in memory
       // This will be used for exact URL matching in the UI
       // We don't need to store this persistently as it's recalculated each time
       const topRankingPageUrls: Record<string, string> = {};
-      aggregatedData.forEach(row => {
+      aggregatedData.forEach((row) => {
         if (row.keys && row.keys.length >= 3) {
           const query = row.keys[1];
           const page = row.keys[2];
@@ -1555,17 +1559,17 @@ export class AnalyticsService {
 
   /**
    * Aggregate data by date and query, selecting the page with most impressions for each combination
-   * 
+   *
    * This follows Google Search Console's aggregation methodology:
    * 1. Group data by date and query
    * 2. For each group, select the page with the highest impressions
    * 3. Calculate weighted position based on impressions
    * 4. Sum clicks and impressions across matching pages
    * 5. Recalculate CTR based on aggregated metrics
-   * 
+   *
    * With the exact URL matching implementation, this aggregation is simplified
    * as we're already filtering for the exact top-ranking page URL for each keyword.
-   * 
+   *
    * This ensures the rank displayed is based on the average position as in Google Search Console,
    * using the exact same aggregation logic for both the last 7 days of the month and the current month to date.
    */
@@ -1618,18 +1622,17 @@ export class AnalyticsService {
       );
 
       // Calculate total clicks across all pages for this date and query
-      const totalClicks = rows.reduce(
-        (sum, row) => sum + (row.clicks || 0),
-        0
-      );
+      const totalClicks = rows.reduce((sum, row) => sum + (row.clicks || 0), 0);
 
       // Create aggregated row with the best page URL and GSC aggregation methodology
       const [date, query] = key.split('_');
-      
+
       // Calculate CTR and position exactly as Google Search Console does
-      const calculatedCtr = totalImpressions > 0 ? (totalClicks / totalImpressions) * 100 : 0;
-      const calculatedPosition = totalImpressions > 0 ? weightedPosition / totalImpressions : 0;
-      
+      const calculatedCtr =
+        totalImpressions > 0 ? (totalClicks / totalImpressions) * 100 : 0;
+      const calculatedPosition =
+        totalImpressions > 0 ? weightedPosition / totalImpressions : 0;
+
       const aggregatedRow: webmasters_v3.Schema$ApiDataRow = {
         keys: [date, query, bestRow.keys?.[2] || ''], // date, query, best page URL (highest impressions)
         clicks: totalClicks, // Sum of clicks across all pages
@@ -1853,7 +1856,6 @@ export class AnalyticsService {
           .startOf('day')
           .toDate();
 
-       
         // Upsert daily keyword stat with both averageRank and topRankingPageUrl
         // The position value is now calculated using GSC's weighted average methodology
         await prisma.searchConsoleKeywordDailyStat.upsert({
@@ -1968,9 +1970,6 @@ export class AnalyticsService {
           data.totalImpressions > 0
             ? data.totalPosition / data.totalImpressions
             : 0;
-            
-       
-        
 
         // Update the keyword record with the calculated initial position
         const updatedKeyword = await prisma.searchConsoleKeyword.update({
@@ -2075,11 +2074,11 @@ export class AnalyticsService {
 
   /**
    * Fetch daily keyword positions for a specific date range
-   * 
+   *
    * Date range logic:
    * - Current month: Fetch data from the first day of the current month up to today
    * - Previous months: Fetch data for the last 7 days only
-   * 
+   *
    * URL matching:
    * - First fetch top ranking pages for each keyword
    * - Then fetch data with exact URL matching for each keyword+URL combination
@@ -2105,7 +2104,7 @@ export class AnalyticsService {
       if (keywords.length === 0) {
         return null;
       }
-      
+
       // First, fetch top ranking pages for each keyword
       const topRankingPages = await this.fetchTopRankingPages({
         campaign,
@@ -2115,14 +2114,14 @@ export class AnalyticsService {
         waitForAllData,
         keywords,
       });
-      
+
       if (!topRankingPages) {
         return null;
       }
-      
+
       // Create an array to store all analytics data
       const allAnalytics: webmasters_v3.Schema$ApiDataRow[] = [];
-      
+
       // Fetch data for all keywords at once instead of per-URL filtering
       // This is more efficient as it reduces the number of API calls
       const keywordAnalytics = await searchConsoleService.getAnalytics({
@@ -2135,7 +2134,7 @@ export class AnalyticsService {
         exactUrlMatch: false, // Don't filter by exact URL match
         topRankingPageUrl: undefined, // No specific top ranking page URL
       });
-      
+
       if (keywordAnalytics) {
         // Filter to only include our target keywords
         const filteredAnalytics = keywordAnalytics.filter((row) => {
@@ -2145,10 +2144,10 @@ export class AnalyticsService {
           }
           return false;
         });
-        
+
         allAnalytics.push(...filteredAnalytics);
       }
-      
+
       if (allAnalytics.length === 0) {
         return null;
       }
@@ -2189,19 +2188,23 @@ export class AnalyticsService {
         const trimmedKeyword = keyword.trim();
         if (!trimmedKeyword) continue;
 
-        // Find the keyword record
-        const keywordRecord = await prisma.searchConsoleKeyword.findUnique({
+        // Ensure the keyword record exists
+        const keywordRecord = await prisma.searchConsoleKeyword.upsert({
           where: {
             analyticsId_keyword: {
               analyticsId: analytics.id,
               keyword: trimmedKeyword,
             },
           },
+          update: {
+            updatedAt: new Date(),
+          },
+          create: {
+            analyticsId: analytics.id,
+            keyword: trimmedKeyword,
+            initialPosition: 0,
+          },
         });
-
-        if (!keywordRecord) {
-          continue;
-        }
 
         // Check if daily data already exists for this date
         const existingDailyStat =
@@ -2285,6 +2288,29 @@ export class AnalyticsService {
       // Get all keywords from the campaign
       const keywords = this.parseCampaignKeywords(campaign);
 
+      // First, ensure all campaign keywords exist in the database
+      for (const keyword of keywords) {
+        const trimmedKeyword = keyword.trim();
+        if (!trimmedKeyword) continue;
+
+        await prisma.searchConsoleKeyword.upsert({
+          where: {
+            analyticsId_keyword: {
+              analyticsId: analytics.id,
+              keyword: trimmedKeyword,
+            },
+          },
+          update: {
+            updatedAt: new Date(),
+          },
+          create: {
+            analyticsId: analytics.id,
+            keyword: trimmedKeyword,
+            initialPosition: 0,
+          },
+        });
+      }
+
       // Process each row of data
       for (const row of dailyKeywordsData) {
         if (!row.keys || row.keys.length < 2) continue;
@@ -2295,8 +2321,8 @@ export class AnalyticsService {
         // Only process data for our target keywords
         if (!keywords.includes(query)) continue;
 
-        // Find the keyword record or create it if it doesn't exist
-        let keywordRecord = await prisma.searchConsoleKeyword.findUnique({
+        // Find the keyword record (it should exist now from the upsert above)
+        const keywordRecord = await prisma.searchConsoleKeyword.findUnique({
           where: {
             analyticsId_keyword: {
               analyticsId: analytics.id,
@@ -2306,13 +2332,8 @@ export class AnalyticsService {
         });
 
         if (!keywordRecord) {
-          keywordRecord = await prisma.searchConsoleKeyword.create({
-            data: {
-              analyticsId: analytics.id,
-              keyword: query,
-              initialPosition: 0,
-            },
-          });
+          console.warn(`Keyword record not found for: ${query}`);
+          continue;
         }
 
         const date = moment
@@ -2324,7 +2345,7 @@ export class AnalyticsService {
         // The data has already been aggregated using GSC's methodology in aggregateDataByDateAndQuery
         if (row.keys && row.keys.length >= 3) {
           const topPageUrl = row.keys[2]; // Top page by impressions
-          
+
           // Save both averageRank and topRankingPageUrl in one operation
           await prisma.searchConsoleKeywordDailyStat.upsert({
             where: {
