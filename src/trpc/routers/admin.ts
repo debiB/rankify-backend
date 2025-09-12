@@ -187,49 +187,94 @@ export const adminRouter = router({
       console.log(`Found ${campaigns.length} active campaigns`);
 
       const analyticsService = new AnalyticsService();
-      const results = [];
 
-      for (const campaign of campaigns) {
-        try {
-          console.log(`Processing campaign: ${campaign.name}`);
+      // Process campaigns concurrently with controlled concurrency
+      const concurrencyLimit = 3; // Limit concurrent requests to avoid overwhelming Google Search Console API
+      const results: Array<{
+        campaignId: string;
+        campaignName: string;
+        siteTraffic?: boolean;
+        keywordData?: boolean;
+        monthlyTraffic?: boolean;
+        error?: string;
+      }> = [];
 
-          // Fetch daily site traffic data
-          const siteTrafficSuccess =
-            await analyticsService.fetchDailySiteTraffic({
-              campaignId: campaign.id,
-              waitForAllData: true,
+      // Process campaigns in batches to control concurrency
+      for (let i = 0; i < campaigns.length; i += concurrencyLimit) {
+        const batch = campaigns.slice(i, i + concurrencyLimit);
+
+        const batchResults = await Promise.allSettled(
+          batch.map(async (campaign) => {
+            try {
+              console.log(`Processing campaign: ${campaign.name}`);
+
+              // Fetch daily site traffic data
+              const siteTrafficSuccess =
+                await analyticsService.fetchDailySiteTraffic({
+                  campaignId: campaign.id,
+                  waitForAllData: true,
+                });
+
+              // Fetch daily keyword data
+              const keywordDataSuccess =
+                await analyticsService.fetchDailyKeywordData({
+                  campaignId: campaign.id,
+                  waitForAllData: true,
+                });
+
+              // Fetch monthly traffic data
+              const monthlyTrafficSuccess =
+                await analyticsService.fetchAndSaveMonthlyTrafficData({
+                  campaignId: campaign.id,
+                  waitForAllData: true,
+                });
+
+              console.log(`Completed processing campaign: ${campaign.name}`);
+
+              return {
+                campaignId: campaign.id,
+                campaignName: campaign.name,
+                siteTraffic: siteTrafficSuccess,
+                keywordData: keywordDataSuccess,
+                monthlyTraffic: monthlyTrafficSuccess,
+              };
+            } catch (error) {
+              console.error(
+                `Error processing campaign ${campaign.name}:`,
+                error
+              );
+              return {
+                campaignId: campaign.id,
+                campaignName: campaign.name,
+                error: error instanceof Error ? error.message : 'Unknown error',
+              };
+            }
+          })
+        );
+
+        // Process batch results
+        batchResults.forEach((result) => {
+          if (result.status === 'fulfilled') {
+            results.push(result.value);
+          } else {
+            console.error(
+              'Unexpected error in batch processing:',
+              result.reason
+            );
+            results.push({
+              campaignId: 'unknown',
+              campaignName: 'unknown',
+              error:
+                result.reason instanceof Error
+                  ? result.reason.message
+                  : 'Unknown error',
             });
+          }
+        });
 
-          // Fetch daily keyword data
-          const keywordDataSuccess =
-            await analyticsService.fetchDailyKeywordData({
-              campaignId: campaign.id,
-              waitForAllData: true,
-            });
-
-          // Fetch monthly traffic data
-          const monthlyTrafficSuccess =
-            await analyticsService.fetchAndSaveMonthlyTrafficData({
-              campaignId: campaign.id,
-              waitForAllData: true,
-            });
-
-          results.push({
-            campaignId: campaign.id,
-            campaignName: campaign.name,
-            siteTraffic: siteTrafficSuccess,
-            keywordData: keywordDataSuccess,
-            monthlyTraffic: monthlyTrafficSuccess,
-          });
-
-          console.log(`Completed processing campaign: ${campaign.name}`);
-        } catch (error) {
-          console.error(`Error processing campaign ${campaign.name}:`, error);
-          results.push({
-            campaignId: campaign.id,
-            campaignName: campaign.name,
-            error: error instanceof Error ? error.message : 'Unknown error',
-          });
+        // Add a small delay between batches to be respectful to the API
+        if (i + concurrencyLimit < campaigns.length) {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
         }
       }
 
@@ -290,7 +335,10 @@ export const adminRouter = router({
         console.error('Error sending test email:', error);
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
-          message: error instanceof Error ? error.message : 'Failed to send test email',
+          message:
+            error instanceof Error
+              ? error.message
+              : 'Failed to send test email',
         });
       }
     }),
