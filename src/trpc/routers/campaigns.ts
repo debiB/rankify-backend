@@ -1255,6 +1255,14 @@ export const campaignsRouter = router({
             // Ensure we always return the top-ranking page data along with keyword data
             // The topPageLink is derived from the topRankingPageUrl which is determined by the page with the highest impressions
             // This ensures that for each keyword, we return both the keyword data and its corresponding top-ranking page
+            
+            // Make sure all months from the global months array are included in each keyword's monthlyData
+            const allMonths = Object.keys(monthlyData).sort((a, b) => {
+              const [monthA, yearA] = a.split('/').map(Number);
+              const [monthB, yearB] = b.split('/').map(Number);
+              return yearA - yearB || monthA - monthB;
+            });
+            
             return {
               id: keyword.id,
               keyword: keyword.keyword,
@@ -1307,9 +1315,25 @@ export const campaignsRouter = router({
           const [monthB, yearB] = b.split('/').map(Number);
           return yearA - yearB || monthA - monthB;
         });
-
+        
+        // Create a new array with keywords that have all months
+        const updatedKeywords = keywords.map(keyword => {
+          // Create a copy of the keyword with all months included
+          const updatedKeyword = { ...keyword };
+          
+          // Ensure all months are included in the monthlyData
+          sortedMonths.forEach((month) => {
+            if (!updatedKeyword.monthlyData[month]) {
+              updatedKeyword.monthlyData[month] = null;
+            }
+          });
+          
+          return updatedKeyword;
+        });
+        
+        // Return the updated keywords array directly
         return {
-          keywords,
+          keywords: updatedKeywords,
           months: sortedMonths,
         };
       } catch (error) {
