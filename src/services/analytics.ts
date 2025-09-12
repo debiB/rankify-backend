@@ -330,8 +330,16 @@ export class AnalyticsService {
         const monthStart = currentDate.clone().startOf('month');
         const monthEnd = currentDate.clone().endOf('month');
 
-        // Don't go beyond the end date
-        const actualEnd = monthEnd.isAfter(endDate) ? endDate : monthEnd;
+        // For past months, use only the last 7 days to match SearchConsoleService logic
+        // For current month, use all available data
+        const isCurrentMonth = currentDate.isSame(moment(), 'month');
+        let actualStart = monthStart;
+        let actualEnd = monthEnd.isAfter(endDate) ? endDate : monthEnd;
+        
+        if (!isCurrentMonth) {
+          // For past months, use only the last 7 days
+          actualStart = actualEnd.clone().subtract(6, 'days');
+        }
 
         // Check if we already have complete data for this month
         const hasCompleteMonthData = await this.checkIfMonthHasCompleteData(
@@ -350,7 +358,7 @@ export class AnalyticsService {
         const dailyKeywordsData = await this.fetchDailyKeywordsData({
           campaign,
           googleAccount,
-          startAt: monthStart,
+          startAt: actualStart,
           endAt: actualEnd,
           waitForAllData,
         });
@@ -359,7 +367,7 @@ export class AnalyticsService {
           await this.saveHistoricalDailyKeywords(
             dailyKeywordsData,
             campaign,
-            monthStart,
+            actualStart,
             actualEnd
           );
         }
@@ -369,7 +377,7 @@ export class AnalyticsService {
           {
             campaign,
             googleAccount,
-            startAt: monthStart,
+            startAt: actualStart,
             endAt: actualEnd,
             waitForAllData,
           }
@@ -1633,6 +1641,7 @@ export class AnalyticsService {
       const calculatedPosition =
         totalImpressions > 0 ? weightedPosition / totalImpressions : 0;
 
+
       const aggregatedRow: webmasters_v3.Schema$ApiDataRow = {
         keys: [date, query, bestRow.keys?.[2] || ''], // date, query, best page URL (highest impressions)
         clicks: totalClicks, // Sum of clicks across all pages
@@ -2232,6 +2241,7 @@ export class AnalyticsService {
         }
 
         const topPageUrl = positionData.keys?.[2] || '';
+
 
         // Upsert daily stat to database with both averageRank and topRankingPageUrl
         await prisma.searchConsoleKeywordDailyStat.upsert({
