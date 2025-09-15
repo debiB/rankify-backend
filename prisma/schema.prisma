@@ -18,6 +18,7 @@ model User {
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
   campaigns             Campaign[]
+  favorites             UserKeywordFavorite[]
 }
 
 enum Role {
@@ -88,6 +89,7 @@ model SearchConsoleKeyword {
   analytics   SearchConsoleKeywordAnalytics @relation(fields: [analyticsId], references: [id], onDelete: Cascade)
   monthlyStats SearchConsoleKeywordMonthlyStat[]
   dailyStats   SearchConsoleKeywordDailyStat[]
+  favorites   UserKeywordFavorite[]
 
   @@index([keyword])
   @@index([analyticsId, keyword])
@@ -173,4 +175,19 @@ model SearchConsoleTrafficDaily {
 
   @@unique([analyticsId, date])
   @@index([date])
+}
+
+// User favorites for keywords
+model UserKeywordFavorite {
+  id         String @id @default(cuid())
+  userId     String
+  keywordId  String
+  createdAt  DateTime @default(now())
+
+  user    User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  keyword SearchConsoleKeyword @relation(fields: [keywordId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, keywordId])
+  @@index([userId])
+  @@index([keywordId])
 }
