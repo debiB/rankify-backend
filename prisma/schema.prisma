@@ -58,6 +58,7 @@ model Campaign {
   
   user                  User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   googleAccount         GoogleAccount @relation(fields: [googleAccountId], references: [id], onDelete: Cascade)
+  cannibalizationAudits KeywordCannibalizationAudit[]
 }
 
 enum CampaignStatus {
@@ -173,4 +174,69 @@ model SearchConsoleTrafficDaily {
 
   @@unique([analyticsId, date])
   @@index([date])
+}
+
+// Keyword cannibalization monitoring models
+model KeywordCannibalizationAudit {
+  id          String   @id @default(cuid())
+  campaignId  String
+  startDate   DateTime
+  endDate     DateTime
+  auditType   AuditType @default(SCHEDULED)
+  status      AuditStatus @default(PENDING)
+  totalKeywords Int @default(0)
+  cannibalizationCount Int @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  campaign    Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  results     KeywordCannibalizationResult[]
+
+  @@index([campaignId])
+  @@index([createdAt])
+}
+
+model KeywordCannibalizationResult {
+  id          String   @id @default(cuid())
+  auditId     String
+  keyword     String
+  topPageUrl  String   @db.Text
+  topPageImpressions Int
+  competingPages KeywordCompetingPage[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  audit       KeywordCannibalizationAudit @relation(fields: [auditId], references: [id], onDelete: Cascade)
+
+  @@index([auditId])
+  @@index([keyword])
+  @@unique([auditId, keyword])
+}
+
+model KeywordCompetingPage {
+  id          String   @id @default(cuid())
+  resultId    String
+  pageUrl     String   @db.Text
+  impressions Int
+  overlapPercentage Float
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  result      KeywordCannibalizationResult @relation(fields: [resultId], references: [id], onDelete: Cascade)
+
+  @@index([resultId])
+  @@index([overlapPercentage])
+}
+
+enum AuditType {
+  INITIAL
+  SCHEDULED
+  
+}
+
+enum AuditStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
 }

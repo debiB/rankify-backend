@@ -1,6 +1,7 @@
 import cron from 'node-cron';
 import { prisma } from '../utils/prisma';
 import { AnalyticsService } from './analytics';
+import { keywordCannibalizationService } from './keywordCannibalization';
 
 const analyticsService = new AnalyticsService();
 
@@ -22,6 +23,7 @@ export class CronService {
   public initCronJobs(): void {
     this.setupMonthlyAnalyticsJob();
     this.setupDailyTrafficJob();
+    this.setupCannibalizationAuditJob();
     console.log('✅ Cron jobs initialized');
   }
 
@@ -63,6 +65,82 @@ export class CronService {
     );
 
     console.log('📅 Daily traffic job scheduled: 6:00 AM UTC every day');
+  }
+
+  /**
+   * Setup keyword cannibalization audit job
+   * Runs every 2 weeks on Sunday at 3:00 AM UTC
+   */
+  private setupCannibalizationAuditJob(): void {
+    cron.schedule(
+      '0 3 * * 0',
+      async () => {
+        console.log('🕐 Starting bi-weekly cannibalization audit job...');
+        await this.runCannibalizationAudits();
+      },
+      {
+        timezone: 'UTC',
+      }
+    );
+
+    console.log('📅 Cannibalization audit job scheduled: 3:00 AM UTC every Sunday');
+  }
+
+  /**
+   * Run cannibalization audits for all active campaigns
+   */
+  private async runCannibalizationAudits(): Promise<void> {
+    try {
+      console.log('🔍 Running cannibalization audits for all active campaigns...');
+
+      // Get campaigns that need audits
+      const campaignsNeedingAudit = await keywordCannibalizationService.getCampaignsNeedingAudit();
+      
+      console.log(`📊 Found ${campaignsNeedingAudit.length} campaigns needing cannibalization audit`);
+
+      if (campaignsNeedingAudit.length === 0) {
+        console.log('ℹ️  No campaigns need cannibalization audit at this time');
+        return;
+      }
+
+      // Run audits for each campaign
+      const results = await Promise.allSettled(
+        campaignsNeedingAudit.map(async (campaignId) => {
+          console.log(`🔄 Running cannibalization audit for campaign: ${campaignId}`);
+
+          try {
+            const auditId = await keywordCannibalizationService.runScheduledAudit(campaignId);
+            
+            console.log(`✅ Successfully completed cannibalization audit for campaign: ${campaignId} (Audit ID: ${auditId})`);
+            return {
+              campaignId,
+              auditId,
+              success: true,
+            };
+          } catch (error) {
+            console.error(`💥 Error running cannibalization audit for campaign ${campaignId}:`, error);
+            return {
+              campaignId,
+              success: false,
+              error,
+            };
+          }
+        })
+      );
+
+      // Log summary
+      const successful = results.filter(
+        (result) => result.status === 'fulfilled' && result.value.success
+      ).length;
+      const failed = results.length - successful;
+
+      console.log(`📈 Cannibalization audit job completed:`);
+      console.log(`   ✅ Successful: ${successful}`);
+      console.log(`   ❌ Failed: ${failed}`);
+      console.log(`   📊 Total campaigns processed: ${results.length}`);
+    } catch (error) {
+      console.error('💥 Error in cannibalization audit job:', error);
+    }
   }
 
   /**
@@ -295,6 +373,14 @@ export class CronService {
   }
 
   /**
+   * Manually trigger the cannibalization audit job (for testing)
+   */
+  public async triggerCannibalizationAudit(): Promise<void> {
+    console.log('🚀 Manually triggering cannibalization audit job...');
+    await this.runCannibalizationAudits();
+  }
+
+  /**
    * Get cron job status
    */
   public getCronStatus(): { initialized: boolean; jobs: string[] } {
@@ -303,6 +389,7 @@ export class CronService {
       jobs: [
         'Monthly Analytics Fetch - 0 2 1 * * (2:00 AM UTC on 1st of every month)',
         'Daily Traffic Fetch - 0 6 * * * (6:00 AM UTC every day)',
+        'Cannibalization Audit - 0 3 * * 0 (3:00 AM UTC every Sunday)',
       ],
     };
   }
