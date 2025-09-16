@@ -15,7 +15,8 @@
     "db:migrate:deploy": "prisma migrate deploy",
     "db:studio": "prisma studio",
     "deploy": "npm run build && npm run db:migrate:deploy && npm run db:generate",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "test:notifications": "ts-node scripts/test-notifications.ts"
   },
   "keywords": [],
   "author": "",
@@ -28,6 +29,7 @@
     "@trpc/server": "^11.4.4",
     "@types/node-cron": "^3.0.11",
     "@types/nodemailer": "^6.4.17",
+    "axios": "^1.6.0",
     "bcryptjs": "^3.0.2",
     "cors": "^2.8.5",
     "dotenv": "^17.2.1",
@@ -48,7 +50,7 @@
     "@types/express": "^5.0.3",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/morgan": "^1.9.10",
-    "@types/node": "^24.2.0",
+    "@types/node": "^24.5.0",
     "nodemon": "^3.1.10",
     "prisma": "^6.13.0",
     "ts-node": "^10.9.2",

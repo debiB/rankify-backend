@@ -1,8 +1,10 @@
 import cron from 'node-cron';
 import { prisma } from '../utils/prisma';
 import { AnalyticsService } from './analytics';
+import { MilestoneService } from './milestoneService';
 
 const analyticsService = new AnalyticsService();
+const milestoneService = new MilestoneService();
 
 export class CronService {
   private static instance: CronService;
@@ -22,6 +24,7 @@ export class CronService {
   public initCronJobs(): void {
     this.setupMonthlyAnalyticsJob();
     this.setupDailyTrafficJob();
+    this.setupDailyMilestoneCheckJob();
     console.log('✅ Cron jobs initialized');
   }
 
@@ -63,6 +66,25 @@ export class CronService {
     );
 
     console.log('📅 Daily traffic job scheduled: 6:00 AM UTC every day');
+  }
+
+  /**
+   * Setup daily milestone checking job
+   * Runs at 8:00 AM UTC every day (after daily traffic job)
+   */
+  private setupDailyMilestoneCheckJob(): void {
+    cron.schedule(
+      '0 8 * * *',
+      async () => {
+        console.log('🎯 Starting daily milestone check job...');
+        await this.checkMilestones();
+      },
+      {
+        timezone: 'UTC',
+      }
+    );
+
+    console.log('📅 Daily milestone check job scheduled: 8:00 AM UTC every day');
   }
 
   /**
@@ -279,6 +301,39 @@ export class CronService {
   }
 
   /**
+   * Check milestones for all active campaigns
+   */
+  private async checkMilestones(): Promise<void> {
+    try {
+      console.log('🎯 Checking milestones for all active campaigns...');
+
+      const results = await milestoneService.checkAllCampaignMilestones();
+
+      // Log summary
+      const totalMilestones = results.reduce((sum, result) => sum + result.milestonesAchieved, 0);
+      const totalNotifications = results.reduce((sum, result) => sum + result.notificationsSent, 0);
+      const totalErrors = results.reduce((sum, result) => sum + result.errors.length, 0);
+
+      console.log(`🎯 Milestone check job completed:`);
+      console.log(`   🎉 Total milestones achieved: ${totalMilestones}`);
+      console.log(`   📧 Total notifications sent: ${totalNotifications}`);
+      console.log(`   ❌ Total errors: ${totalErrors}`);
+      console.log(`   📊 Total campaigns processed: ${results.length}`);
+
+      // Log errors if any
+      if (totalErrors > 0) {
+        results.forEach(result => {
+          if (result.errors.length > 0) {
+            console.error(`❌ Errors for campaign ${result.campaignName}:`, result.errors);
+          }
+        });
+      }
+    } catch (error) {
+      console.error('💥 Error in milestone check job:', error);
+    }
+  }
+
+  /**
    * Manually trigger the monthly analytics job (for testing)
    */
   public async triggerMonthlyAnalytics(): Promise<void> {
@@ -295,6 +350,14 @@ export class CronService {
   }
 
   /**
+   * Manually trigger the milestone check job (for testing)
+   */
+  public async triggerMilestoneCheck(): Promise<void> {
+    console.log('🚀 Manually triggering milestone check job...');
+    await this.checkMilestones();
+  }
+
+  /**
    * Get cron job status
    */
   public getCronStatus(): { initialized: boolean; jobs: string[] } {
@@ -303,6 +366,7 @@ export class CronService {
       jobs: [
         'Monthly Analytics Fetch - 0 2 1 * * (2:00 AM UTC on 1st of every month)',
         'Daily Traffic Fetch - 0 6 * * * (6:00 AM UTC every day)',
+        'Daily Milestone Check - 0 8 * * * (8:00 AM UTC every day)',
       ],
     };
   }

@@ -18,6 +18,7 @@ model User {
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
   campaigns             Campaign[]
+  campaignUsers         CampaignUser[]
 }
 
 enum Role {
@@ -58,6 +59,10 @@ model Campaign {
   
   user                  User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   googleAccount         GoogleAccount @relation(fields: [googleAccountId], references: [id], onDelete: Cascade)
+  campaignGroups        CampaignWhatsAppGroup[]
+  campaignUsers         CampaignUser[]
+  milestonePreferences  MilestonePreference[]
+  sentMilestones        SentMilestone[]
 }
 
 enum CampaignStatus {
@@ -88,6 +93,7 @@ model SearchConsoleKeyword {
   analytics   SearchConsoleKeywordAnalytics @relation(fields: [analyticsId], references: [id], onDelete: Cascade)
   monthlyStats SearchConsoleKeywordMonthlyStat[]
   dailyStats   SearchConsoleKeywordDailyStat[]
+  sentMilestones SentMilestone[]
 
   @@index([keyword])
   @@index([analyticsId, keyword])
@@ -173,4 +179,117 @@ model SearchConsoleTrafficDaily {
 
   @@unique([analyticsId, date])
   @@index([date])
+}
+
+// Milestone notification models
+model WhatsAppGroup {
+  id          String   @id @default(cuid())
+  groupId     String   @unique // WhatsApp group ID from Whapi API
+  name        String
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  campaignGroups CampaignWhatsAppGroup[]
+}
+
+model CampaignWhatsAppGroup {
+  id          String   @id @default(cuid())
+  campaignId  String
+  groupId     String
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  campaign    Campaign     @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  whatsAppGroup WhatsAppGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  
+  @@unique([campaignId, groupId])
+}
+
+model CampaignUser {
+  id          String   @id @default(cuid())
+  campaignId  String
+  userId      String
+  role        CampaignUserRole @default(VIEWER)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  campaign    Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([campaignId, userId])
+}
+
+enum CampaignUserRole {
+  ADMIN
+  VIEWER
+}
+
+model MilestoneType {
+  id          String   @id @default(cuid())
+  name        String   @unique // e.g., "position_1", "position_2", "position_3", "clicks_100", "clicks_500"
+  displayName String   // e.g., "Position 1", "Position 2", "100 Clicks"
+  description String?
+  type        MilestoneCategory
+  threshold   Int?     // For click milestones
+  position    Int?     // For position milestones (1, 2, 3)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  preferences MilestonePreference[]
+  sentMilestones SentMilestone[]
+}
+
+enum MilestoneCategory {
+  POSITION
+  CLICKS
+}
+
+model MilestonePreference {
+  id              String   @id @default(cuid())
+  campaignId      String
+  milestoneTypeId String
+  emailEnabled    Boolean  @default(true)
+  whatsappEnabled Boolean  @default(true)
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  // Relations
+  campaign        Campaign      @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  milestoneType   MilestoneType @relation(fields: [milestoneTypeId], references: [id], onDelete: Cascade)
+  
+  @@unique([campaignId, milestoneTypeId])
+}
+
+model SentMilestone {
+  id              String   @id @default(cuid())
+  campaignId      String
+  milestoneTypeId String
+  keywordId       String?  // Optional: specific keyword that achieved the milestone
+  achievedAt      DateTime // When the milestone was actually achieved
+  sentAt          DateTime @default(now()) // When the notification was sent
+  emailSent       Boolean  @default(false)
+  whatsappSent    Boolean  @default(false)
+  emailError      String?  @db.Text
+  whatsappError   String?  @db.Text
+  metricValue     Float?   // The actual position or click count achieved
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  // Relations
+  campaign        Campaign      @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  milestoneType   MilestoneType @relation(fields: [milestoneTypeId], references: [id], onDelete: Cascade)
+  keyword         SearchConsoleKeyword? @relation(fields: [keywordId], references: [id], onDelete: SetNull)
+  
+  @@index([campaignId, milestoneTypeId])
+  @@index([achievedAt])
 }
