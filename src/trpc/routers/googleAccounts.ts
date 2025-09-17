@@ -269,4 +269,78 @@ export const googleAccountsRouter = router({
       throw new Error('Failed to fetch Search Console sites');
     }
   }),
+
+  testAccount: adminProcedure
+    .input(z.object({ accountId: z.string() }))
+    .mutation(async ({ input }) => {
+      try {
+        const account = await prisma.googleAccount.findUnique({
+          where: { id: input.accountId },
+        });
+
+        if (!account) {
+          throw new Error('Account not found');
+        }
+
+        // Test the account by trying to authenticate and get Search Console sites
+        const oauth2Client = new google.auth.OAuth2(
+          process.env.GOOGLE_CLIENT_ID,
+          process.env.GOOGLE_CLIENT_SECRET,
+          process.env.GOOGLE_REDIRECT_URI ||
+            'http://localhost:3001/auth/google/callback'
+        );
+
+        oauth2Client.setCredentials({
+          refresh_token: account.refreshToken,
+        });
+
+        // Try to refresh the token to validate it
+        const { credentials } = await oauth2Client.refreshAccessToken();
+
+        // Create Search Console API client
+        const searchConsole = google.searchconsole({
+          version: 'v1',
+          auth: oauth2Client,
+        });
+
+        // Get sites to test the connection
+        const response = await searchConsole.sites.list();
+        const sites = response.data.siteEntry || [];
+
+        return {
+          success: true,
+          message: `Account connection successful. Found ${sites.length} Search Console sites.`,
+          sitesCount: sites.length,
+          sites: sites.slice(0, 5).map((site: any) => ({
+            siteUrl: site.siteUrl,
+            permissionLevel: site.permissionLevel,
+          })), // Return first 5 sites as preview
+        };
+      } catch (error: any) {
+        console.error('Error testing Google account:', error);
+
+        // Provide more specific error messages
+        if (error?.response?.data?.error === 'invalid_grant') {
+          throw new Error(
+            'Account needs to be re-authenticated. Please reconnect your Google account.'
+          );
+        } else if (error?.response?.data?.error === 'insufficient_permission') {
+          throw new Error(
+            'Account does not have sufficient permissions for Search Console access.'
+          );
+        } else if (error?.response?.status === 401) {
+          throw new Error(
+            'Authentication failed. Please check your account credentials.'
+          );
+        } else if (error?.response?.status === 403) {
+          throw new Error(
+            'Access denied. Please ensure the account has Search Console access.'
+          );
+        } else {
+          throw new Error(
+            `Connection test failed: ${error.message || 'Unknown error'}`
+          );
+        }
+      }
+    }),
 });
