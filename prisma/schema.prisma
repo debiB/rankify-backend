@@ -88,6 +88,7 @@ model SearchConsoleKeyword {
   analytics   SearchConsoleKeywordAnalytics @relation(fields: [analyticsId], references: [id], onDelete: Cascade)
   monthlyStats SearchConsoleKeywordMonthlyStat[]
   dailyStats   SearchConsoleKeywordDailyStat[]
+  monthlyComputed SearchConsoleKeywordMonthlyComputed[]
 
   @@index([keyword])
   @@index([analyticsId, keyword])
@@ -125,6 +126,26 @@ model SearchConsoleKeywordDailyStat {
 
   @@unique([keywordId, date])
   @@index([date])
+}
+
+// Persisted per-month keyword metrics computed from raw GSC (for Rankings table)
+model SearchConsoleKeywordMonthlyComputed {
+  id                 String   @id @default(cuid())
+  keywordId          String
+  month              Int
+  year               Int
+  averageRank        Float   // impressions-weighted avg position for the month's top page
+  impressions        Int     // total impressions used in calc window
+  clicks             Int     // optional, total clicks in calc window
+  topRankingPageUrl  String  @db.Text
+  calcWindowDays     Int     // 7 for past months, N for current month
+  computedAt         DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  keyword SearchConsoleKeyword @relation(fields: [keywordId], references: [id], onDelete: Cascade)
+
+  @@unique([keywordId, month, year])
+  @@index([month, year])
 }
 
 // Traffic analytics models
