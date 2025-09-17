@@ -3,6 +3,10 @@ import { TRPCError } from '@trpc/server';
 import { protectedProcedure, adminProcedure, router } from '../context';
 import { prisma } from '../../utils/prisma';
 import { AnalyticsService } from '../../services/analytics';
+import { searchConsoleService } from '../../services/searchConsole';
+import fs from 'fs';
+import path from 'path';
+import moment from 'moment';
 
 const analyticsService = new AnalyticsService();
 
@@ -1176,12 +1180,473 @@ export const campaignsRouter = router({
           };
         }
 
-        // Process the data via shared helper
-        return await processKeywordsForCampaign({
-          campaign,
-          keywords: analytics.keywords,
-          selectedMonth: input.selectedMonth,
+        // Process the data for the frontend using daily records
+        const keywords = await Promise.all(
+          analytics.keywords.map(async (keyword) => {
+            try {
+              const monthlyData: Record<string, number | null> = {};
+              // Per-month aggregates for full-month search volume and top page (by impressions)
+              const monthlySearchVolumeByMonthKey: Record<string, number> = {};
+              const monthlyTopPageByMonthKey: Record<string, string> = {};
+              const currentMonth = new Date().getMonth() + 1;
+              const currentYear = new Date().getFullYear();
+
+              // Initialize all months with null (excluding current month due to 3-day delay)
+              for (
+                let year = new Date(campaign.startingDate).getFullYear();
+                year <= currentYear;
+                year++
+              ) {
+                const startMonth =
+                  year === new Date(campaign.startingDate).getFullYear()
+                    ? new Date(campaign.startingDate).getMonth() + 1
+                    : 1;
+                // Include current month (we'll handle the 3-day delay in the calculation)
+                const endMonth = year === currentYear ? currentMonth : 12;
+
+                for (let month = startMonth; month <= endMonth; month++) {
+                  const monthKey = `${month}/${year}`;
+                  monthlyData[monthKey] = null;
+                }
+              }
+
+              // Initial rank: always use precomputed keyword.initialPosition
+              // (computed using GSC-aligned 7-day pre-start top-page logic)
+              const initialRank = keyword.initialPosition || 0;
+
+              // Monthly metrics
+              // Documentation:
+              // - We read per-month rank/top page/impressions from
+              //   SearchConsoleKeywordMonthlyComputed (persisted during data fetch flows).
+              // - No GSC calls here; if a month is missing we leave zeros and rely on cron/
+              //   fetch flows to populate (previous on-demand compute removed).
+              if (keyword.dailyStats && Array.isArray(keyword.dailyStats)) {
+                const dailyStatsByMonth: Record<string, any[]> = {};
+
+                // Group daily stats by month
+                keyword.dailyStats.forEach((stat) => {
+                  if (stat && stat.date) {
+                    const date = new Date(stat.date);
+                    const monthKey = `${
+                      date.getMonth() + 1
+                    }/${date.getFullYear()}`;
+
+                    if (!dailyStatsByMonth[monthKey]) {
+                      dailyStatsByMonth[monthKey] = [];
+                    }
+                    dailyStatsByMonth[monthKey].push(stat);
+                  }
+                });
+
+                // Process each month
+                for (const monthKey of Object.keys(dailyStatsByMonth)) {
+                  const [month, year] = monthKey.split('/').map(Number);
+
+                  try {
+                    // Check if we have computed data for this month
+                    const computedData =
+                      await prisma.searchConsoleKeywordMonthlyComputed.findUnique(
+                        {
+                          where: {
+                            keywordId_month_year: {
+                              keywordId: keyword.id,
+                              month,
+                              year,
+                            },
+                          },
+                        }
+                      );
+
+                    if (computedData) {
+                      // Use existing computed data
+                      monthlyData[monthKey] = computedData.averageRank;
+                      monthlyTopPageByMonthKey[monthKey] =
+                        computedData.topRankingPageUrl;
+                      monthlySearchVolumeByMonthKey[monthKey] =
+                        computedData.impressions;
+                    } else {
+                      // No computed data available - this should be rare since we compute proactively
+                      console.log(
+                        `No computed monthly data found for keyword "${keyword.keyword}" in ${month}/${year} - this should be computed by cron jobs`
+                      );
+                      monthlyData[monthKey] = 0;
+                      monthlyTopPageByMonthKey[monthKey] = '';
+                      monthlySearchVolumeByMonthKey[monthKey] = 0;
+                    }
+                  } catch (error) {
+                    console.error(
+                      `Error processing monthly data for ${monthKey}:`,
+                      error
+                    );
+                    monthlyData[monthKey] = 0;
+                    monthlyTopPageByMonthKey[monthKey] = '';
+                    monthlySearchVolumeByMonthKey[monthKey] = 0;
+                  }
+                }
+              }
+
+              // Find the selected month's data
+              let selectedMonthStat = null;
+              if (input.selectedMonth) {
+                const selectedMonthParts = input.selectedMonth.split(' ');
+                const selectedMonthName = selectedMonthParts[0];
+                const selectedYear = selectedMonthParts[1];
+
+                const monthNames = [
+                  'January',
+                  'February',
+                  'March',
+                  'April',
+                  'May',
+                  'June',
+                  'July',
+                  'August',
+                  'September',
+                  'October',
+                  'November',
+                  'December',
+                ];
+                const selectedMonthNum =
+                  monthNames.indexOf(selectedMonthName) + 1;
+
+                // Find the selected month's average from daily data
+                const selectedMonthKey = `${selectedMonthNum}/${parseInt(
+                  selectedYear
+                )}`;
+                const selectedMonthValue = monthlyData[selectedMonthKey];
+                const selectedMonthTopPage =
+                  monthlyTopPageByMonthKey[selectedMonthKey] || '';
+
+                if (
+                  selectedMonthValue !== null &&
+                  selectedMonthValue !== undefined
+                ) {
+                  // Compute full-month impressions (searchVolume) from dailyStats
+                  const selectedMonthStats = (keyword.dailyStats || []).filter(
+                    (stat) => {
+                      if (!stat || !stat.date) return false;
+                      const d = new Date(stat.date);
+                      return (
+                        d.getMonth() + 1 === selectedMonthNum &&
+                        d.getFullYear() === parseInt(selectedYear)
+                      );
+                    }
+                  );
+
+                  const monthSearchVolume = selectedMonthStats.reduce(
+                    (sum, s) => sum + (s.searchVolume || 0),
+                    0
+                  );
+                  // Position already computed from raw GSC
+                  const monthTopPageUrl = selectedMonthTopPage;
+                  const monthPositionForTopPage = selectedMonthValue as number;
+
+                  selectedMonthStat = {
+                    // Use top-page only monthly position to align with GSC exact page filtering
+                    averageRank: monthPositionForTopPage,
+                    searchVolume: monthSearchVolume,
+                    topRankingPageUrl: monthTopPageUrl,
+                  };
+                }
+              }
+
+              // Calculate changes
+              const monthlyValues = Object.values(monthlyData).filter(
+                (val) => val !== null
+              );
+              const latestValue =
+                monthlyValues.length > 0
+                  ? monthlyValues[monthlyValues.length - 1]
+                  : null;
+
+              // Use selected month stat if available, otherwise use latest
+              const currentStat =
+                selectedMonthStat ||
+                (latestValue
+                  ? {
+                      // Use latest month's precomputed values from raw GSC
+                      averageRank: (() => {
+                        try {
+                          const availableMonthKeys = Object.keys(monthlyData)
+                            .filter((k) => monthlyData[k] !== null)
+                            .sort((a, b) => {
+                              const [mA, yA] = a.split('/').map(Number);
+                              const [mB, yB] = b.split('/').map(Number);
+                              return yA - yB || mA - mB;
+                            });
+                          const latestMonthKey =
+                            availableMonthKeys[availableMonthKeys.length - 1];
+                          return monthlyData[latestMonthKey] as number;
+                        } catch {
+                          return latestValue as number;
+                        }
+                      })(),
+                      searchVolume: (() => {
+                        try {
+                          // Determine latest month key with data
+                          const availableMonthKeys = Object.keys(monthlyData)
+                            .filter((k) => monthlyData[k] !== null)
+                            .sort((a, b) => {
+                              const [mA, yA] = a.split('/').map(Number);
+                              const [mB, yB] = b.split('/').map(Number);
+                              return yA - yB || mA - mB;
+                            });
+                          const latestMonthKey =
+                            availableMonthKeys[availableMonthKeys.length - 1];
+                          const [m, y] = latestMonthKey.split('/').map(Number);
+                          // Sum full-month impressions from dailyStats for that month
+                          const stats = (keyword.dailyStats || []).filter(
+                            (s) => {
+                              if (!s || !s.date) return false;
+                              const d = new Date(s.date);
+                              return (
+                                d.getMonth() + 1 === m && d.getFullYear() === y
+                              );
+                            }
+                          );
+                          return stats.reduce(
+                            (sum, s) => sum + (s.searchVolume || 0),
+                            0
+                          );
+                        } catch {
+                          return 0;
+                        }
+                      })(),
+                      topRankingPageUrl: (() => {
+                        try {
+                          const availableMonthKeys = Object.keys(monthlyData)
+                            .filter((k) => monthlyData[k] !== null)
+                            .sort((a, b) => {
+                              const [mA, yA] = a.split('/').map(Number);
+                              const [mB, yB] = b.split('/').map(Number);
+                              return yA - yB || mA - mB;
+                            });
+                          const latestMonthKey =
+                            availableMonthKeys[availableMonthKeys.length - 1];
+                          return monthlyTopPageByMonthKey[latestMonthKey] || '';
+                        } catch {
+                          return '';
+                        }
+                      })(),
+                    }
+                  : null);
+
+              // Find the previous month stat for the selected month
+              let previousMonthStat = null;
+              if (selectedMonthStat && input.selectedMonth) {
+                // Find the month before the selected month
+                const selectedMonthParts = input.selectedMonth!.split(' ');
+                const selectedMonthName = selectedMonthParts[0];
+                const selectedYear = selectedMonthParts[1];
+
+                const monthNames = [
+                  'January',
+                  'February',
+                  'March',
+                  'April',
+                  'May',
+                  'June',
+                  'July',
+                  'August',
+                  'September',
+                  'October',
+                  'November',
+                  'December',
+                ];
+                const selectedMonthNum =
+                  monthNames.indexOf(selectedMonthName) + 1;
+
+                // Calculate previous month
+                let prevMonth = selectedMonthNum - 1;
+                let prevYear = parseInt(selectedYear);
+                if (prevMonth === 0) {
+                  prevMonth = 12;
+                  prevYear--;
+                }
+
+                const prevMonthKey = `${prevMonth}/${prevYear}`;
+                const prevMonthValue = monthlyData[prevMonthKey];
+
+                if (prevMonthValue !== null && prevMonthValue !== undefined) {
+                  previousMonthStat = {
+                    averageRank: prevMonthValue,
+                    searchVolume: 0,
+                    topRankingPageUrl: '',
+                  };
+                }
+              } else {
+                // Fallback to the second-to-last month
+                const monthlyValues = Object.values(monthlyData).filter(
+                  (val) => val !== null
+                );
+                if (monthlyValues.length > 1) {
+                  previousMonthStat = {
+                    averageRank: monthlyValues[monthlyValues.length - 2],
+                    searchVolume: 0,
+                    topRankingPageUrl: '',
+                  };
+                }
+              }
+
+              const monthlyChange =
+                previousMonthStat && currentStat
+                  ? (previousMonthStat.averageRank || 0) -
+                    (currentStat.averageRank || 0)
+                  : 0;
+
+              const overallChange = currentStat
+                ? initialRank - (currentStat.averageRank || 0)
+                : 0;
+
+              // Calculate search volume for the whole month (or all available days for current month)
+              let searchVolume = 0;
+              try {
+                if (input.selectedMonth) {
+                  const selectedMonthParts = input.selectedMonth.split(' ');
+                  const selectedMonthName = selectedMonthParts[0];
+                  const selectedYear = selectedMonthParts[1];
+                  const monthNames = [
+                    'January',
+                    'February',
+                    'March',
+                    'April',
+                    'May',
+                    'June',
+                    'July',
+                    'August',
+                    'September',
+                    'October',
+                    'November',
+                    'December',
+                  ];
+                  const selectedMonthNum =
+                    monthNames.indexOf(selectedMonthName) + 1;
+                  const stats = (keyword.dailyStats || []).filter((s) => {
+                    if (!s || !s.date) return false;
+                    const d = new Date(s.date);
+                    return (
+                      d.getMonth() + 1 === selectedMonthNum &&
+                      d.getFullYear() === parseInt(selectedYear)
+                    );
+                  });
+                  searchVolume = stats.reduce(
+                    (sum, s) => sum + (s.searchVolume || 0),
+                    0
+                  );
+                } else {
+                  const availableMonthKeys = Object.keys(monthlyData)
+                    .filter((k) => monthlyData[k] !== null)
+                    .sort((a, b) => {
+                      const [mA, yA] = a.split('/').map(Number);
+                      const [mB, yB] = b.split('/').map(Number);
+                      return yA - yB || mA - mB;
+                    });
+                  const latestMonthKey =
+                    availableMonthKeys[availableMonthKeys.length - 1];
+                  const [m, y] = latestMonthKey.split('/').map(Number);
+                  const stats = (keyword.dailyStats || []).filter((s) => {
+                    if (!s || !s.date) return false;
+                    const d = new Date(s.date);
+                    return d.getMonth() + 1 === m && d.getFullYear() === y;
+                  });
+                  searchVolume = stats.reduce(
+                    (sum, s) => sum + (s.searchVolume || 0),
+                    0
+                  );
+                }
+              } catch {
+                searchVolume = 0;
+              }
+
+              // Ensure we always return the top-ranking page data along with keyword data
+              // The topPageLink is derived from the topRankingPageUrl which is determined by the page with the highest impressions
+              // This ensures that for each keyword, we return both the keyword data and its corresponding top-ranking page
+
+              // Make sure all months from the global months array are included in each keyword's monthlyData
+              const allMonths = Object.keys(monthlyData).sort((a, b) => {
+                const [monthA, yearA] = a.split('/').map(Number);
+                const [monthB, yearB] = b.split('/').map(Number);
+                return yearA - yearB || monthA - monthB;
+              });
+
+              return {
+                id: keyword.id,
+                keyword: keyword.keyword,
+                initialRank: initialRank,
+                monthlyData,
+                monthlyChange,
+                overallChange,
+                position: currentStat?.averageRank || 0,
+                searchVolume: searchVolume,
+                // Process and return the top-ranking page URL for this keyword
+                topPageLink: (() => {
+                  try {
+                    const url = currentStat?.topRankingPageUrl || '';
+                    return url ? decodeURIComponent(url) : '';
+                  } catch (error) {
+                    console.error('Error decoding URL:', error);
+                    return currentStat?.topRankingPageUrl || '';
+                  }
+                })(),
+              };
+            } catch (error) {
+              console.error(
+                'Error processing keyword:',
+                keyword.keyword,
+                error
+              );
+              // Return a default structure for this keyword
+              // Even in error cases, we maintain the structure that includes topPageLink
+              // This ensures consistent data structure for the frontend
+              return {
+                id: keyword.id,
+                keyword: keyword.keyword,
+                initialRank: keyword.initialPosition || 0,
+                monthlyData: {},
+                monthlyChange: 0,
+                overallChange: 0,
+                position: 0,
+                searchVolume: 0,
+                topPageLink: '', // Empty string for top page link in error cases
+              };
+            }
+          })
+        );
+
+        // Get unique months for the table headers
+        const months = new Set<string>();
+        keywords.forEach((keyword) => {
+          Object.keys(keyword.monthlyData).forEach((month) => {
+            months.add(month);
+          });
         });
+
+        const sortedMonths = Array.from(months).sort((a, b) => {
+          const [monthA, yearA] = a.split('/').map(Number);
+          const [monthB, yearB] = b.split('/').map(Number);
+          return yearA - yearB || monthA - monthB;
+        });
+
+        // Create a new array with keywords that have all months
+        const updatedKeywords = keywords.map((keyword) => {
+          // Create a copy of the keyword with all months included
+          const updatedKeyword = { ...keyword };
+
+          // Ensure all months are included in the monthlyData
+          sortedMonths.forEach((month) => {
+            if (!updatedKeyword.monthlyData[month]) {
+              updatedKeyword.monthlyData[month] = null;
+            }
+          });
+
+          return updatedKeyword;
+        });
+
+        // Return the updated keywords array directly
+        return {
+          keywords: updatedKeywords,
+          months: sortedMonths,
+        };
       } catch (error) {
         console.error('Error in getCampaignAnalytics:', error);
         if (error instanceof TRPCError) {
@@ -1248,7 +1713,7 @@ export const campaignsRouter = router({
         }
 
         // Toggle favorite
-        const userKeywordFavorite = (prisma as any).userKeywordFavorite;
+        const userKeywordFavorite = prisma.userKeywordFavorite;
         const existing = await userKeywordFavorite.findUnique({
           where: {
             userId_keywordId: {
@@ -1319,7 +1784,7 @@ export const campaignsRouter = router({
         }
 
         // Get favorites for this user restricted to these keywords
-        const userKeywordFavorite = (prisma as any).userKeywordFavorite;
+        const userKeywordFavorite = prisma.userKeywordFavorite;
         const favoriteRecords = await userKeywordFavorite.findMany({
           where: {
             userId: ctx.user.id,
@@ -2336,6 +2801,225 @@ export const campaignsRouter = router({
           message: `Failed to log monthly keyword metrics: ${
             error instanceof Error ? error.message : 'Unknown error'
           }`,
+        });
+      }
+    }),
+
+  // Re-fetch all search data for a specific campaign (admin only)
+  reFetchCampaignData: adminProcedure
+    .input(z.object({ campaignId: z.string() }))
+    .mutation(async ({ input }) => {
+      try {
+        const campaign = await prisma.campaign.findUnique({
+          where: { id: input.campaignId },
+        });
+
+        if (!campaign) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'Campaign not found',
+          });
+        }
+
+        console.log(`Starting data re-fetch for campaign: ${campaign.name}`);
+
+        // 1) First delete existing data for this campaign/site
+        const siteUrl = campaign.searchConsoleSite;
+
+        const keywordAnalytics =
+          await prisma.searchConsoleKeywordAnalytics.findFirst({
+            where: { siteUrl },
+          });
+        const trafficAnalytics =
+          await prisma.searchConsoleTrafficAnalytics.findFirst({
+            where: { siteUrl },
+          });
+
+        if (keywordAnalytics) {
+          // Delete computed monthly data first
+          await prisma.searchConsoleKeywordMonthlyComputed.deleteMany({
+            where: { keyword: { analyticsId: keywordAnalytics.id } },
+          });
+          await prisma.searchConsoleKeywordMonthlyStat.deleteMany({
+            where: { keyword: { analyticsId: keywordAnalytics.id } },
+          });
+          await prisma.searchConsoleKeywordDailyStat.deleteMany({
+            where: { keyword: { analyticsId: keywordAnalytics.id } },
+          });
+          await prisma.searchConsoleKeyword.deleteMany({
+            where: { analyticsId: keywordAnalytics.id },
+          });
+          await prisma.searchConsoleKeywordAnalytics.delete({
+            where: { id: keywordAnalytics.id },
+          });
+        }
+
+        if (trafficAnalytics) {
+          await prisma.searchConsoleTrafficDaily.deleteMany({
+            where: { analyticsId: trafficAnalytics.id },
+          });
+          await prisma.searchConsoleTrafficMonthly.deleteMany({
+            where: { analyticsId: trafficAnalytics.id },
+          });
+          await prisma.searchConsoleTrafficAnalytics.delete({
+            where: { id: trafficAnalytics.id },
+          });
+        }
+
+        // 2) Then fetch fresh data
+        const results = await Promise.allSettled([
+          analyticsService.fetchDailySiteTraffic({
+            campaignId: campaign.id,
+            waitForAllData: true,
+          }),
+          analyticsService.fetchDailyKeywordData({
+            campaignId: campaign.id,
+            waitForAllData: true,
+          }),
+          analyticsService.fetchAndSaveMonthlyTrafficData({
+            campaignId: campaign.id,
+            waitForAllData: true,
+          }),
+        ]);
+
+        const successful = results.filter(
+          (result) => result.status === 'fulfilled'
+        ).length;
+        const failed = results.filter(
+          (result) => result.status === 'rejected'
+        ).length;
+
+        console.log(
+          `Data re-fetch completed for campaign: ${campaign.name}. ${successful} successful, ${failed} failed.`
+        );
+
+        return {
+          success: true,
+          campaignName: campaign.name,
+          results: {
+            successful,
+            failed,
+            total: results.length,
+          },
+        };
+      } catch (error) {
+        console.error('Error re-fetching campaign data:', error);
+        if (error instanceof TRPCError) {
+          throw error;
+        }
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to re-fetch campaign data',
+        });
+      }
+    }),
+
+  // Export raw GSC daily keyword rows for a custom date range [startDate, endDate]
+  exportKeywordRawRange: adminProcedure
+    .input(
+      z.object({
+        campaignId: z.string(),
+        startDate: z.string(), // YYYY-MM-DD
+        endDate: z.string(), // YYYY-MM-DD
+      })
+    )
+    .mutation(async ({ input }) => {
+      try {
+        const campaign = await prisma.campaign.findUnique({
+          where: { id: input.campaignId },
+          include: { googleAccount: true },
+        });
+
+        if (!campaign || !campaign.googleAccount) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'Campaign or Google account not found',
+          });
+        }
+
+        // Parse and validate dates
+        const startAt = moment.utc(input.startDate, 'YYYY-MM-DD', true);
+        const endAt = moment.utc(input.endDate, 'YYYY-MM-DD', true);
+        if (!startAt.isValid() || !endAt.isValid()) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Invalid dates',
+          });
+        }
+        if (endAt.isBefore(startAt)) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'endDate before startDate',
+          });
+        }
+
+        // Respect GSC 3-day delay: cap end date at today-3
+        const capEnd = moment.utc().subtract(3, 'days').endOf('day');
+        const effectiveEnd = endAt.isAfter(capEnd) ? capEnd : endAt;
+
+        // Fetch raw rows with date, query, page dimensions for the range
+        const rows = await searchConsoleService.getAnalytics({
+          campaign: campaign as any,
+          googleAccount: campaign.googleAccount as any,
+          startAt: startAt,
+          endAt: effectiveEnd,
+          dimensions: ['date', 'query', 'page'],
+          waitForAllData: true,
+          exactUrlMatch: false,
+        });
+
+        if (!rows || rows.length === 0) {
+          return {
+            success: true,
+            message: 'No rows returned from GSC',
+            filePath: null,
+            count: 0,
+          };
+        }
+
+        const debugDir = path.join(process.cwd(), 'debug');
+        if (!fs.existsSync(debugDir)) {
+          fs.mkdirSync(debugDir, { recursive: true });
+        }
+
+        const safeSite = campaign.searchConsoleSite
+          .replace(/[^a-zA-Z0-9-_\.]/g, '_')
+          .slice(-80);
+        const filename = `gsc_keywords_raw_${safeSite}_${startAt.format(
+          'YYYYMMDD'
+        )}-${effectiveEnd.format('YYYYMMDD')}.json`;
+        const filePath = path.join(debugDir, filename);
+
+        fs.writeFileSync(
+          filePath,
+          JSON.stringify(
+            {
+              meta: {
+                campaignId: campaign.id,
+                siteUrl: campaign.searchConsoleSite,
+                startDate: startAt.format('YYYY-MM-DD'),
+                endDate: effectiveEnd.format('YYYY-MM-DD'),
+                dimensions: ['date', 'query', 'page'],
+                count: rows.length,
+              },
+              rows,
+            },
+            null,
+            2
+          )
+        );
+
+        return {
+          success: true,
+          message: 'Exported raw GSC rows',
+          filePath,
+          count: rows.length,
+        };
+      } catch (error) {
+        console.error('Error exporting keyword raw range:', error);
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to export raw GSC rows for date range',
         });
       }
     }),
