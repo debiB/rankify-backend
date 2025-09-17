@@ -19,6 +19,8 @@ model User {
   updatedAt             DateTime @updatedAt
   campaigns             Campaign[]
   campaignUsers         CampaignUser[]
+  emailPreferences      UserCampaignEmailPreference[]
+  adminNotificationPreferences AdminNotificationPreferences?
 }
 
 enum Role {
@@ -63,6 +65,7 @@ model Campaign {
   campaignUsers         CampaignUser[]
   milestonePreferences  MilestonePreference[]
   sentMilestones        SentMilestone[]
+  emailPreferences      UserCampaignEmailPreference[]
 }
 
 enum CampaignStatus {
@@ -186,7 +189,7 @@ model WhatsAppGroup {
   id          String   @id @default(cuid())
   groupId     String   @unique // WhatsApp group ID from Whapi API
   name        String
-  description String?
+  description String?  @db.Text
   isActive    Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -292,4 +295,43 @@ model SentMilestone {
   
   @@index([campaignId, milestoneTypeId])
   @@index([achievedAt])
+}
+
+// User-Campaign email notification preferences
+model UserCampaignEmailPreference {
+  id          String   @id @default(cuid())
+  userId      String
+  campaignId  String
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  campaign    Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  
+  @@unique([userId, campaignId])
+}
+
+// Admin global notification preferences
+model AdminNotificationPreferences {
+  id                    String   @id @default(cuid())
+  userId                String   @unique // Admin user ID
+  enableEmail           Boolean  @default(true)
+  enableWhatsApp        Boolean  @default(true)
+  enableAllNotifications Boolean @default(true)
+  
+  // Selected preferences
+  whatsAppGroupId       String?  // Selected WhatsApp group ID
+  campaignId            String?  // Selected campaign ID for email notifications
+  
+  // Global thresholds (JSON stored as string)
+  positionThresholds    String?  @db.Text // JSON: [1, 2, 3]
+  clickThresholds       String?  @db.Text // JSON: [100, 500, 1000]
+  
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  
+  // Relations
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }

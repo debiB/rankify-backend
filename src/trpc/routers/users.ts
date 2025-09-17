@@ -313,4 +313,111 @@ export const usersRouter = router({
         },
       };
     }),
+
+  // Map user to campaigns for email notifications
+  setCampaignEmailPreferences: adminProcedure
+    .input(
+      z.object({
+        userId: z.string(),
+        campaignIds: z.array(z.string()),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const { userId, campaignIds } = input;
+
+      // Verify user exists
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+      });
+
+      if (!user) {
+        throw new Error('User not found');
+      }
+
+      // Remove existing email preferences for this user
+      await prisma.userCampaignEmailPreference.deleteMany({
+        where: { userId },
+      });
+
+      // Add new email preferences
+      const emailPreferences = [];
+      for (const campaignId of campaignIds) {
+        // Verify campaign exists
+        const campaign = await prisma.campaign.findUnique({
+          where: { id: campaignId },
+        });
+
+        if (campaign) {
+          emailPreferences.push({
+            userId,
+            campaignId,
+            isActive: true,
+          });
+        }
+      }
+
+      if (emailPreferences.length > 0) {
+        await prisma.userCampaignEmailPreference.createMany({
+          data: emailPreferences,
+        });
+      }
+
+      return {
+        success: true,
+        data: {
+          userId,
+          campaignsAssigned: emailPreferences.length,
+        },
+      };
+    }),
+
+  // Get campaigns assigned to a user for email notifications
+  getCampaignEmailPreferences: adminProcedure
+    .input(z.object({ userId: z.string() }))
+    .query(async ({ input }) => {
+      const { userId } = input;
+
+      const userCampaigns = await prisma.userCampaignEmailPreference.findMany({
+        where: { 
+          userId,
+          isActive: true,
+        },
+        include: {
+          campaign: true,
+        },
+      });
+
+      const campaigns = userCampaigns.map(uc => ({
+        id: uc.campaign.id,
+        name: uc.campaign.name,
+        status: uc.campaign.status,
+        startingDate: uc.campaign.startingDate,
+      }));
+
+      return {
+        success: true,
+        data: campaigns,
+      };
+    }),
+
+  // Get all users (for admin dropdown)
+  getAllUsers: adminProcedure.query(async () => {
+    const users = await prisma.user.findMany({
+      where: { status: 'ACTIVE' },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        role: true,
+      },
+      orderBy: {
+        name: 'asc',
+      },
+    });
+
+    return {
+      success: true,
+      data: users,
+    };
+  }),
 });

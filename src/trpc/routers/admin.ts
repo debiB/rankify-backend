@@ -6,6 +6,7 @@ import { CronService } from '../../services/cronService';
 import { AnalyticsService } from '../../services/analytics';
 import { comparePassword } from '../../utils/auth';
 import { sendTestEmail } from '../../utils/email';
+import { NotificationTemplateService } from '../../services/notificationTemplateService';
 
 export const adminRouter = router({
   // Delete all search console analytics data
@@ -426,6 +427,208 @@ export const adminRouter = router({
             error instanceof Error
               ? error.message
               : 'Failed to send test email',
+        });
+      }
+    }),
+
+  // Get admin notification preferences
+  getNotificationPreferences: adminProcedure
+    .input(z.object({ userId: z.string() }))
+    .query(async ({ input }) => {
+      try {
+        const { userId } = input;
+
+        // Verify user is admin
+        const user = await prisma.user.findUnique({
+          where: { id: userId },
+        });
+
+        if (!user || user.role !== 'ADMIN') {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Access denied. Admin role required.',
+          });
+        }
+
+        let preferences = await prisma.adminNotificationPreferences.findUnique({
+          where: { userId },
+        });
+
+        // Create default preferences if none exist
+        if (!preferences) {
+          preferences = await prisma.adminNotificationPreferences.create({
+            data: {
+              userId,
+              enableEmail: true,
+              enableWhatsApp: true,
+              enableAllNotifications: true,
+              positionThresholds: JSON.stringify([1, 2, 3]),
+              clickThresholds: JSON.stringify([100, 500, 1000]),
+            },
+          });
+        }
+
+        // Parse JSON thresholds
+        const response = {
+          ...preferences,
+          positionThresholds: preferences.positionThresholds 
+            ? JSON.parse(preferences.positionThresholds) 
+            : [1, 2, 3],
+          clickThresholds: preferences.clickThresholds 
+            ? JSON.parse(preferences.clickThresholds) 
+            : [100, 500, 1000],
+        };
+
+        return {
+          success: true,
+          data: response,
+        };
+      } catch (error) {
+        if (error instanceof TRPCError) {
+          throw error;
+        }
+        console.error('Error fetching admin preferences:', error);
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to fetch admin preferences',
+        });
+      }
+    }),
+
+  // Update admin notification preferences
+  updateNotificationPreferences: adminProcedure
+    .input(
+      z.object({
+        userId: z.string(),
+        enableEmail: z.boolean().optional(),
+        enableWhatsApp: z.boolean().optional(),
+        enableAllNotifications: z.boolean().optional(),
+        positionThresholds: z.array(z.number()).optional(),
+        clickThresholds: z.array(z.number()).optional(),
+        whatsAppGroupId: z.string().optional(),
+        campaignId: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      try {
+        const {
+          userId,
+          enableEmail,
+          enableWhatsApp,
+          enableAllNotifications,
+          positionThresholds,
+          clickThresholds,
+          whatsAppGroupId,
+          campaignId,
+        } = input;
+
+        // Verify user is admin
+        const user = await prisma.user.findUnique({
+          where: { id: userId },
+        });
+
+        if (!user || user.role !== 'ADMIN') {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Access denied. Admin role required.',
+          });
+        }
+
+        const preferences = await prisma.adminNotificationPreferences.upsert({
+          where: { userId },
+          update: {
+            enableEmail: enableEmail ?? true,
+            enableWhatsApp: enableWhatsApp ?? true,
+            enableAllNotifications: enableAllNotifications ?? true,
+            positionThresholds: positionThresholds ? JSON.stringify(positionThresholds) : undefined,
+            clickThresholds: clickThresholds ? JSON.stringify(clickThresholds) : undefined,
+            whatsAppGroupId: whatsAppGroupId,
+            campaignId: campaignId,
+          },
+          create: {
+            userId,
+            enableEmail: enableEmail ?? true,
+            enableWhatsApp: enableWhatsApp ?? true,
+            enableAllNotifications: enableAllNotifications ?? true,
+            positionThresholds: JSON.stringify(positionThresholds || [1, 2, 3]),
+            clickThresholds: JSON.stringify(clickThresholds || [100, 500, 1000]),
+            whatsAppGroupId: whatsAppGroupId,
+            campaignId: campaignId,
+          },
+        });
+
+        // Parse JSON thresholds for response
+        const response = {
+          ...preferences,
+          positionThresholds: preferences.positionThresholds 
+            ? JSON.parse(preferences.positionThresholds) 
+            : [1, 2, 3],
+          clickThresholds: preferences.clickThresholds 
+            ? JSON.parse(preferences.clickThresholds) 
+            : [100, 500, 1000],
+        };
+
+        return {
+          success: true,
+          data: response,
+        };
+      } catch (error) {
+        if (error instanceof TRPCError) {
+          throw error;
+        }
+        console.error('Error updating admin preferences:', error);
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to update admin preferences',
+        });
+      }
+    }),
+
+  // Get notification template preview
+  getNotificationTemplatePreview: adminProcedure
+    .input(
+      z.object({
+        type: z.string(),
+        position: z.number().optional(),
+        clicks: z.number().optional(),
+        keyword: z.string().optional(),
+        campaignName: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      try {
+        const { type, position, clicks, keyword, campaignName } = input;
+        
+        let milestoneType = '';
+        let value: number | string = '';
+        
+        if (type === 'milestone') {
+          if (position) {
+            milestoneType = `Position ${position}`;
+            value = position;
+          } else if (clicks) {
+            milestoneType = `${clicks} clicks`;
+            value = clicks;
+          }
+        }
+        
+        const template = NotificationTemplateService.generateMilestoneTemplate(
+          campaignName || 'Sample Campaign',
+          milestoneType,
+          value,
+          keyword,
+          new Date()
+        );
+
+        return {
+          success: true,
+          template: template.emailBody,
+        };
+      } catch (error) {
+        console.error('Error generating notification template preview:', error);
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to generate notification template preview',
         });
       }
     }),

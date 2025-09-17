@@ -5,6 +5,8 @@ import { googleAccountsRouter } from './routers/googleAccounts';
 import { campaignsRouter } from './routers/campaigns';
 import { adminRouter } from './routers/admin';
 import { milestonesRouter } from './routers/milestones';
+import { whatsappRouter } from './routers/whatsapp';
+import { cannibalizationRouter } from './routers/cannibalization';
 
 export const appRouter = router({
   auth: authRouter,
@@ -13,6 +15,8 @@ export const appRouter = router({
   campaigns: campaignsRouter,
   admin: adminRouter,
   milestones: milestonesRouter,
+  whatsapp: whatsappRouter,
+  cannibalization: cannibalizationRouter,
 });
 
 export type AppRouter = typeof appRouter;

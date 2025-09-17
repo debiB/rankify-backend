@@ -216,6 +216,7 @@ const createCampaignSchema = z.object({
   keywords: z.string().min(1, 'Keywords are required'),
   userId: z.string().min(1, 'User ID is required'),
   googleAccountId: z.string().min(1, 'Google Account ID is required'),
+  whatsappGroupIds: z.array(z.string()).optional(), // WhatsApp group IDs
 });
 
 const updateCampaignSchema = z.object({
@@ -235,6 +236,7 @@ const updateCampaignSchema = z.object({
     .optional(),
   keywords: z.string().min(1, 'Keywords are required').optional(),
   status: z.enum(['ACTIVE', 'PAUSED']).optional(),
+  whatsappGroupIds: z.array(z.string()).optional(), // WhatsApp group IDs
 });
 
 export const campaignsRouter = router({
@@ -295,6 +297,30 @@ export const campaignsRouter = router({
             },
           },
         });
+
+        // Associate WhatsApp groups if provided
+        if (input.whatsappGroupIds && input.whatsappGroupIds.length > 0) {
+          const groupAssociations = [];
+          for (const groupId of input.whatsappGroupIds) {
+            // Verify group exists in our database
+            const group = await prisma.whatsAppGroup.findUnique({
+              where: { groupId },
+            });
+
+            if (group) {
+              groupAssociations.push({
+                campaignId: campaign.id,
+                groupId: group.id,
+              });
+            }
+          }
+
+          if (groupAssociations.length > 0) {
+            await prisma.campaignWhatsAppGroup.createMany({
+              data: groupAssociations,
+            });
+          }
+        }
 
         // Fetch daily site traffic data (dimensions: ['date'])
         analyticsService.fetchDailySiteTraffic({
@@ -480,10 +506,13 @@ export const campaignsRouter = router({
           updateData.keywords &&
           existingCampaign.keywords !== updateData.keywords;
 
+        // Extract whatsappGroupIds from updateData before updating campaign
+        const { whatsappGroupIds, ...campaignUpdateData } = updateData;
+
         // Update the campaign
         const campaign = await prisma.campaign.update({
           where: { id },
-          data: updateData,
+          data: campaignUpdateData,
           include: {
             user: {
               select: {
@@ -501,6 +530,38 @@ export const campaignsRouter = router({
             },
           },
         });
+
+        // Update WhatsApp groups if provided
+        if (whatsappGroupIds !== undefined) {
+          // Remove existing group associations
+          await prisma.campaignWhatsAppGroup.deleteMany({
+            where: { campaignId: id },
+          });
+
+          // Add new group associations
+          if (whatsappGroupIds.length > 0) {
+            const groupAssociations = [];
+            for (const groupId of whatsappGroupIds) {
+              // Verify group exists in our database
+              const group = await prisma.whatsAppGroup.findUnique({
+                where: { groupId },
+              });
+
+              if (group) {
+                groupAssociations.push({
+                  campaignId: id,
+                  groupId: group.id,
+                });
+              }
+            }
+
+            if (groupAssociations.length > 0) {
+              await prisma.campaignWhatsAppGroup.createMany({
+                data: groupAssociations,
+              });
+            }
+          }
+        }
 
         // Handle keyword changes asynchronously
         if (isKeywordsChanged) {

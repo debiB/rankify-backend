@@ -362,8 +362,30 @@ export class MilestoneService {
     const milestoneType = preference.milestoneType;
     const dashboardUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/campaigns/${campaign.id}`;
 
+    // Get admin notification preferences
+    const adminUser = await prisma.user.findFirst({
+      where: { role: 'ADMIN' },
+      include: {
+        adminNotificationPreferences: true,
+      },
+    });
+
+    const adminPrefs = adminUser?.adminNotificationPreferences;
+    
+    // Check if notifications are globally disabled
+    if (!adminPrefs?.enableAllNotifications) {
+      console.log('📵 All notifications are disabled by admin preferences');
+      return {
+        success: false,
+        emailSent: false,
+        whatsappSent: false,
+        emailError: 'Notifications disabled by admin',
+        whatsappError: 'Notifications disabled by admin',
+      };
+    }
+
     // Send email notifications
-    if (preference.emailEnabled && this.emailTransporter) {
+    if (preference.emailEnabled && adminPrefs?.enableEmail && this.emailTransporter) {
       try {
         const emailSubject = `🎉 Milestone Achieved - ${campaign.name}`;
         const emailBody = this.formatEmailMessage(
@@ -375,13 +397,47 @@ export class MilestoneService {
           achievedDate
         );
 
-        for (const campaignUser of campaign.campaignUsers) {
-          await this.emailTransporter.sendMail({
-            from: process.env.SMTP_FROM || process.env.SMTP_USER,
-            to: campaignUser.user.email,
-            subject: emailSubject,
-            html: emailBody,
-          });
+        // Get users who have email preferences for this campaign
+        const emailPreferences = await prisma.userCampaignEmailPreference.findMany({
+          where: {
+            campaignId: campaign.id,
+            isActive: true,
+          },
+          include: {
+            user: {
+              select: {
+                email: true,
+                name: true,
+                status: true,
+              },
+            },
+          },
+        });
+
+        // Send emails to users with preferences for this campaign
+        for (const emailPref of emailPreferences) {
+          if (emailPref.user.status === 'ACTIVE') {
+            await this.emailTransporter.sendMail({
+              from: process.env.SMTP_FROM || process.env.SMTP_USER,
+              to: emailPref.user.email,
+              subject: emailSubject,
+              html: emailBody,
+            });
+          }
+        }
+
+        // Also send to campaign users if no specific email preferences are set
+        if (emailPreferences.length === 0) {
+          for (const campaignUser of campaign.campaignUsers) {
+            if (campaignUser.user.status === 'ACTIVE') {
+              await this.emailTransporter.sendMail({
+                from: process.env.SMTP_FROM || process.env.SMTP_USER,
+                to: campaignUser.user.email,
+                subject: emailSubject,
+                html: emailBody,
+              });
+            }
+          }
         }
 
         emailSent = true;
@@ -393,7 +449,7 @@ export class MilestoneService {
     }
 
     // Send WhatsApp notifications
-    if (preference.whatsappEnabled) {
+    if (preference.whatsappEnabled && adminPrefs?.enableWhatsApp) {
       try {
         const whatsappMessage = this.whatsappService.formatMilestoneMessage(
           campaign.name,
