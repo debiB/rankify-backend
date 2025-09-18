@@ -121,24 +121,32 @@ export class CronService {
           );
 
           try {
+            // Documentation:
+            // Cron jobs persist monthly keyword metrics indirectly by calling
+            // fetchDailyKeywordData, which now computes/updates
+            // SearchConsoleKeywordMonthlyComputed. The UI reads from DB only.
             // Fetch daily site traffic and keyword data
-            const siteTrafficSuccess = await analyticsService.fetchDailySiteTraffic({
-              campaignId: campaign.id,
-              waitForAllData: true, // Run in background
-            });
-            
-            const keywordDataSuccess = await analyticsService.fetchDailyKeywordData({
-              campaignId: campaign.id,
-              waitForAllData: true, // Run in background
-            });
+            const siteTrafficSuccess =
+              await analyticsService.fetchDailySiteTraffic({
+                campaignId: campaign.id,
+                waitForAllData: true, // Run in background
+              });
+
+            const keywordDataSuccess =
+              await analyticsService.fetchDailyKeywordData({
+                campaignId: campaign.id,
+                waitForAllData: true, // Run in background
+              });
 
             // Fetch monthly traffic data for the last 12 months
-            const monthlyTrafficSuccess = await analyticsService.fetchAndSaveMonthlyTrafficData({
-              campaignId: campaign.id,
-              waitForAllData: true, // Run in background
-            });
-            
-            const success = siteTrafficSuccess && keywordDataSuccess && monthlyTrafficSuccess;
+            const monthlyTrafficSuccess =
+              await analyticsService.fetchAndSaveMonthlyTrafficData({
+                campaignId: campaign.id,
+                waitForAllData: true, // Run in background
+              });
+
+            const success =
+              siteTrafficSuccess && keywordDataSuccess && monthlyTrafficSuccess;
 
             if (success) {
               console.log(

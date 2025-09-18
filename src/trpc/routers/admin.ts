@@ -47,41 +47,57 @@ export const adminRouter = router({
 
         console.log('Starting deletion of all search data...');
 
-        // 1. Delete all keyword monthly stats first (they reference keywords)
+        // Deletion order (documentation):
+        // 1) Computed monthly keyword metrics (depend on keywords)
+        // 2) Keyword monthly stats (depend on keywords)
+        // 3) Keywords (depend on keyword analytics)
+        // 4) Keyword analytics
+        // 5) Traffic daily (depend on traffic analytics)
+        // 6) Traffic monthly (depend on traffic analytics)
+        // 7) Traffic analytics
+        // This order avoids FK constraint violations and ensures a clean wipe.
+        // 1. Delete all computed monthly keyword data first (they reference keywords)
+        const deletedComputedMonthlyData =
+          await prisma.searchConsoleKeywordMonthlyComputed.deleteMany({});
+        console.log(
+          `Deleted ${deletedComputedMonthlyData.count} computed monthly keyword records`
+        );
+
+        // 2. Delete all keyword monthly stats (they reference keywords)
         const deletedKeywordMonthlyStats =
           await prisma.searchConsoleKeywordMonthlyStat.deleteMany({});
         console.log(
           `Deleted ${deletedKeywordMonthlyStats.count} keyword monthly stats`
         );
 
-        // 2. Delete all keywords (they reference analytics)
+        // 3. Delete all keywords (they reference analytics)
         const deletedKeywords = await prisma.searchConsoleKeyword.deleteMany(
           {}
         );
         console.log(`Deleted ${deletedKeywords.count} keywords`);
 
-        // 3. Delete all keyword analytics records
+        // 4. Delete all keyword analytics records
         const deletedKeywordAnalytics =
           await prisma.searchConsoleKeywordAnalytics.deleteMany({});
         console.log(
           `Deleted ${deletedKeywordAnalytics.count} keyword analytics records`
         );
 
-        // 4. Delete all traffic daily data first (they reference traffic analytics)
+        // 5. Delete all traffic daily data first (they reference traffic analytics)
         const deletedTrafficDaily =
           await prisma.searchConsoleTrafficDaily.deleteMany({});
         console.log(
           `Deleted ${deletedTrafficDaily.count} traffic daily records`
         );
 
-        // 5. Delete all traffic monthly data (they reference traffic analytics)
+        // 6. Delete all traffic monthly data (they reference traffic analytics)
         const deletedTrafficMonthly =
           await prisma.searchConsoleTrafficMonthly.deleteMany({});
         console.log(
           `Deleted ${deletedTrafficMonthly.count} traffic monthly records`
         );
 
-        // 6. Delete all traffic analytics records
+        // 7. Delete all traffic analytics records
         const deletedTrafficAnalytics =
           await prisma.searchConsoleTrafficAnalytics.deleteMany({});
         console.log(
@@ -89,6 +105,7 @@ export const adminRouter = router({
         );
 
         const totalDeleted =
+          deletedComputedMonthlyData.count +
           deletedKeywordMonthlyStats.count +
           deletedKeywords.count +
           deletedKeywordAnalytics.count +
@@ -101,6 +118,7 @@ export const adminRouter = router({
         return {
           success: true,
           deletedRecords: {
+            computedMonthlyData: deletedComputedMonthlyData.count,
             keywordMonthlyStats: deletedKeywordMonthlyStats.count,
             keywords: deletedKeywords.count,
             keywordAnalytics: deletedKeywordAnalytics.count,

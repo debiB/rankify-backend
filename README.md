@@ -98,3 +98,39 @@ CORS_ORIGIN="http://localhost:3000"
 The server runs on port 3001 by default. Make sure your MySQL database is running and the connection string in `.env` is correct.
 
 For development, the server will automatically restart when you make changes to the source code. 
+
+## 📊 Search Console Data Model & Aggregation (New)
+
+### Monthly Keyword Metrics (Persistence)
+- We persist per-month keyword metrics in `SearchConsoleKeywordMonthlyComputed` to avoid calling the Google Search Console (GSC) API on UI refresh.
+- For each keyword and month:
+  - Window: current month → all available days; past months → last 7 days of that month.
+  - Determine a single top page across the window by total impressions.
+  - Tie-breakers (in order): daysWithData → clicks → better (lower) avg position → prefer URL without hash → shorter URL → lexicographic.
+  - Compute weighted average position using only that page’s rows: Σ(position × impressions) / Σ(impressions).
+  - Upsert result into `SearchConsoleKeywordMonthlyComputed` with `{ topRankingPageUrl, averageRank, impressions, clicks, calcWindowDays }`.
+
+### Read Path (Frontend/API)
+- `campaigns.getCampaignAnalytics` reads monthly rank/top page/impressions directly from `SearchConsoleKeywordMonthlyComputed`.
+- No GSC calls occur on tab refresh. Missing months remain zero until cron/data-fetch fills them.
+
+### Initial Rank (Baseline)
+- On campaign create/update (and re-fetch), we compute an initial rank per keyword from the 7 days before `startingDate`:
+  - Select the top page across those 7 days using the same tie-breakers as above.
+  - Compute weighted average position using only that page’s rows.
+  - Store in `SearchConsoleKeyword.initialPosition`. Daily rows are kept for diagnostics/search volume.
+
+### Cron & Data Flows
+- Cron jobs (monthly/daily) call `fetchDailyKeywordData`, which now also computes/updates `SearchConsoleKeywordMonthlyComputed`.
+- `createCampaign`, `updateCampaign` (when startingDate changes), and admin “Get All Data” flows trigger the same computation.
+
+### Data Deletion
+- Admin “Delete All Data” deletes in safe FK order:
+  1) `SearchConsoleKeywordMonthlyComputed`
+  2) `SearchConsoleKeywordMonthlyStat`
+  3) `SearchConsoleKeyword`
+  4) `SearchConsoleKeywordAnalytics`
+  5) `SearchConsoleTrafficDaily`
+  6) `SearchConsoleTrafficMonthly`
+  7) `SearchConsoleTrafficAnalytics`
+- After deletion, use “Get All Data” to repopulate, or wait for cron.

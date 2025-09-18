@@ -67,18 +67,6 @@ export class AnalyticsService {
       const startAt = threeDaysAgo.startOf('day');
       const endAt = threeDaysAgo.endOf('day');
 
-      // Fetch and save daily keyword positions (date/query dimensions)
-      const dailyKeywordsData = await this.fetchDailyKeywordsData({
-        campaign,
-        googleAccount,
-        startAt,
-        endAt,
-        waitForAllData,
-      });
-      if (dailyKeywordsData) {
-        await this.saveDailyKeywordsData(dailyKeywordsData, campaign);
-      }
-
       // Fetch and save daily keyword data with page dimensions
       const dailyKeywordDataWithDimensions =
         await this.fetchDailyKeywordDataWithDimensions({
@@ -160,24 +148,6 @@ export class AnalyticsService {
 
         // Don't go beyond the end date
         const actualEnd = monthEnd.isAfter(endDate) ? endDate : monthEnd;
-
-        // Fetch daily keyword positions for this month
-        const dailyKeywordsData = await this.fetchDailyKeywordsData({
-          campaign,
-          googleAccount,
-          startAt: monthStart,
-          endAt: actualEnd,
-          waitForAllData,
-        });
-
-        if (dailyKeywordsData) {
-          await this.saveHistoricalDailyKeywords(
-            dailyKeywordsData,
-            campaign,
-            monthStart,
-            actualEnd
-          );
-        }
 
         // Move to next month
         currentDate.add(1, 'month').startOf('month');
@@ -354,25 +324,7 @@ export class AnalyticsService {
           continue;
         }
 
-        // First fetch daily keyword data with date/query dimensions for this month
-        const dailyKeywordsData = await this.fetchDailyKeywordsData({
-          campaign,
-          googleAccount,
-          startAt: actualStart,
-          endAt: actualEnd,
-          waitForAllData,
-        });
-
-        if (dailyKeywordsData) {
-          await this.saveHistoricalDailyKeywords(
-            dailyKeywordsData,
-            campaign,
-            actualStart,
-            actualEnd
-          );
-        }
-
-        // Then fetch daily keyword data with page dimensions for this month
+        // Fetch daily keyword data with page dimensions for this month
         const dailyKeywordData = await this.fetchDailyKeywordDataWithDimensions(
           {
             campaign,
@@ -414,6 +366,9 @@ export class AnalyticsService {
       if (initialPositionData) {
         await this.saveInitialPositionData(initialPositionData, campaign);
       }
+
+      // Compute monthly metrics for all months that have daily data
+      await this.computeMonthlyMetricsForCampaign(campaignId);
 
       return true;
     } catch (error) {
@@ -1602,7 +1557,9 @@ export class AnalyticsService {
     });
 
     // Aggregate each group to get the page with most impressions
-    // and follow GSC's aggregation methodology
+    // For alignment with GSC when filtering by an exact page, we will use
+    // ONLY the best page row's metrics for the (date, query), rather than
+    // summing across all pages. This ensures daily stats reflect the exact page.
     const aggregatedData: webmasters_v3.Schema$ApiDataRow[] = [];
 
     Object.entries(groupedData).forEach(([key, rows]) => {
@@ -1615,38 +1572,14 @@ export class AnalyticsService {
         return currentImpressions > bestImpressions ? current : best;
       });
 
-      // Calculate total impressions across all pages for this date and query
-      const totalImpressions = rows.reduce(
-        (sum, row) => sum + (row.impressions || 0),
-        0
-      );
-
-      // Calculate weighted position (GSC methodology)
-      // Position is weighted by impressions across all pages
-      // This ensures the rank calculation exactly matches Google Search Console's methodology
-      const weightedPosition = rows.reduce(
-        (sum, row) => sum + (row.position || 0) * (row.impressions || 0),
-        0
-      );
-
-      // Calculate total clicks across all pages for this date and query
-      const totalClicks = rows.reduce((sum, row) => sum + (row.clicks || 0), 0);
-
-      // Create aggregated row with the best page URL and GSC aggregation methodology
+      // Use only best page row's metrics to reflect exact-page filtering
       const [date, query] = key.split('_');
-
-      // Calculate CTR and position exactly as Google Search Console does
-      const calculatedCtr =
-        totalImpressions > 0 ? (totalClicks / totalImpressions) * 100 : 0;
-      const calculatedPosition =
-        totalImpressions > 0 ? weightedPosition / totalImpressions : 0;
-
       const aggregatedRow: webmasters_v3.Schema$ApiDataRow = {
-        keys: [date, query, bestRow.keys?.[2] || ''], // date, query, best page URL (highest impressions)
-        clicks: totalClicks, // Sum of clicks across all pages
-        impressions: totalImpressions, // Sum of impressions across all pages
-        ctr: calculatedCtr / 100, // Recalculated CTR (divide by 100 to match GSC format)
-        position: calculatedPosition, // Weighted average position
+        keys: [date, query, bestRow.keys?.[2] || ''],
+        clicks: bestRow.clicks || 0,
+        impressions: bestRow.impressions || 0,
+        ctr: bestRow.ctr || 0,
+        position: bestRow.position || 0,
       };
 
       aggregatedData.push(aggregatedRow);
@@ -1893,6 +1826,22 @@ export class AnalyticsService {
     }
   }
 
+  /**
+   * Save initial position data for a campaign's keywords.
+   *
+   * Window: 7 days before campaign startingDate (provided via initialPositionData).
+   * Per keyword, we determine a single top page across the entire 7-day window:
+   *  - Primary: highest total impressions across the window.
+   *  - Tie-breakers (in order):
+   *      daysWithData (more is better) → clicks (more is better) →
+   *      avgPosition (lower is better) → prefer URL without hash →
+   *      shorter URL → lexicographic order.
+   * We then compute the weighted average position using only rows for that
+   * top page across the window: sum(position × impressions) / sum(impressions).
+   *
+   * The computed value is stored in SearchConsoleKeyword.initialPosition.
+   * We also retain per-day rows for diagnostics and search volume.
+   */
   private async saveInitialPositionData(
     initialPositionData: webmasters_v3.Schema$ApiDataRow[],
     campaign: Campaign
@@ -1914,40 +1863,121 @@ export class AnalyticsService {
       // Get all keywords from the campaign
       const keywords = this.parseCampaignKeywords(campaign);
 
-      // Group initial position data by keyword to calculate average
+      // Build structures per keyword and page across the 7-day window
+      type PageAgg = {
+        impressions: number;
+        clicks: number;
+        weightedPositionSum: number;
+        daysWithData: number;
+      };
+      const perKeywordPageAgg: Record<string, Record<string, PageAgg>> = {};
+
+      for (const row of initialPositionData) {
+        if (!row.keys || row.keys.length < 3) continue;
+
+        const query = row.keys[1];
+        const pageUrl = row.keys[2];
+
+        if (!keywords.includes(query)) continue;
+
+        const impressions = row.impressions || 0;
+        const clicks = row.clicks || 0;
+        const position = row.position || 0;
+
+        perKeywordPageAgg[query] = perKeywordPageAgg[query] || {};
+        perKeywordPageAgg[query][pageUrl] = perKeywordPageAgg[query][
+          pageUrl
+        ] || {
+          impressions: 0,
+          clicks: 0,
+          weightedPositionSum: 0,
+          daysWithData: 0,
+        };
+        const agg = perKeywordPageAgg[query][pageUrl];
+        agg.impressions += impressions;
+        agg.clicks += clicks;
+        agg.weightedPositionSum += position * impressions;
+        agg.daysWithData += 1;
+      }
+
+      // Determine top page per keyword using the same tie-breakers
+      const topPageByKeyword: Record<string, string> = {};
+      for (const query of Object.keys(perKeywordPageAgg)) {
+        const pages = perKeywordPageAgg[query];
+        let topPageUrl = '';
+        let maxImpressions = -1;
+        let bestPageDays = -1;
+        let bestPageClicks = -1;
+        let bestPagePosition = Infinity;
+        let bestPageLength = Infinity;
+
+        for (const [page, data] of Object.entries(pages)) {
+          const impressions = data.impressions;
+          const avgPosition =
+            data.impressions > 0
+              ? data.weightedPositionSum / data.impressions
+              : Infinity;
+
+          if (
+            impressions > maxImpressions ||
+            (impressions === maxImpressions &&
+              data.daysWithData > bestPageDays) ||
+            (impressions === maxImpressions &&
+              data.daysWithData === bestPageDays &&
+              data.clicks > bestPageClicks) ||
+            (impressions === maxImpressions &&
+              data.daysWithData === bestPageDays &&
+              data.clicks === bestPageClicks &&
+              avgPosition < bestPagePosition) ||
+            (impressions === maxImpressions &&
+              data.daysWithData === bestPageDays &&
+              data.clicks === bestPageClicks &&
+              avgPosition === bestPagePosition &&
+              !page.includes('#') &&
+              topPageUrl.includes('#')) ||
+            (impressions === maxImpressions &&
+              data.daysWithData === bestPageDays &&
+              data.clicks === bestPageClicks &&
+              avgPosition === bestPagePosition &&
+              page.length < bestPageLength) ||
+            (impressions === maxImpressions &&
+              data.daysWithData === bestPageDays &&
+              data.clicks === bestPageClicks &&
+              avgPosition === bestPagePosition &&
+              page.length === bestPageLength &&
+              page < topPageUrl)
+          ) {
+            maxImpressions = impressions;
+            topPageUrl = page;
+            bestPageDays = data.daysWithData;
+            bestPageClicks = data.clicks;
+            bestPagePosition = avgPosition;
+            bestPageLength = page.length;
+          }
+        }
+        topPageByKeyword[query] = topPageUrl;
+      }
+
+      // Compute weighted average position per keyword using only the top page rows
       const keywordInitialPositions: Record<
         string,
-        { totalPosition: number; totalImpressions: number; count: number }
+        { totalPosition: number; totalImpressions: number }
       > = {};
-
-      // Process each row of data and calculate weighted average
       for (const row of initialPositionData) {
-        if (!row.keys || row.keys.length < 2) {
-          continue;
-        }
-
-        const dateString = row.keys[0];
+        if (!row.keys || row.keys.length < 3) continue;
         const query = row.keys[1];
-
-        // Only process data for our target keywords
-        if (!keywords.includes(query)) {
-          continue;
-        }
+        const pageUrl = row.keys[2];
+        if (!keywords.includes(query)) continue;
+        if (topPageByKeyword[query] !== pageUrl) continue;
 
         const position = row.position || 0;
         const impressions = row.impressions || 0;
-
-        if (!keywordInitialPositions[query]) {
-          keywordInitialPositions[query] = {
-            totalPosition: 0,
-            totalImpressions: 0,
-            count: 0,
-          };
-        }
-
+        keywordInitialPositions[query] = keywordInitialPositions[query] || {
+          totalPosition: 0,
+          totalImpressions: 0,
+        };
         keywordInitialPositions[query].totalPosition += position * impressions;
         keywordInitialPositions[query].totalImpressions += impressions;
-        keywordInitialPositions[query].count += 1;
       }
 
       // Update keyword records with calculated initial positions
@@ -2077,309 +2107,6 @@ export class AnalyticsService {
     } catch (error) {
       console.error('Error logging search console data summary:', error);
       // Don't throw error to avoid breaking the main flow
-    }
-  }
-
-  /**
-   * Fetch daily keyword positions for a specific date range
-   *
-   * Date range logic:
-   * - Current month: Fetch data from the first day of the current month up to today
-   * - Previous months: Fetch data for the last 7 days only
-   *
-   * URL matching:
-   * - First fetch top ranking pages for each keyword
-   * - Then fetch data with exact URL matching for each keyword+URL combination
-   * - This ensures our results match what users see in Google Search Console
-   * - Each keyword rank is based only on that exact keyword + URL (no influence from other queries)
-   */
-  private async fetchDailyKeywordsData({
-    campaign,
-    googleAccount,
-    startAt,
-    endAt,
-    waitForAllData,
-  }: {
-    campaign: Campaign;
-    googleAccount: GoogleAccount;
-    startAt: moment.Moment;
-    endAt: moment.Moment;
-    waitForAllData: boolean;
-  }): Promise<webmasters_v3.Schema$ApiDataRow[] | null> {
-    try {
-      const keywords = this.parseCampaignKeywords(campaign);
-
-      if (keywords.length === 0) {
-        return null;
-      }
-
-      // First, fetch top ranking pages for each keyword
-      const topRankingPages = await this.fetchTopRankingPages({
-        campaign,
-        googleAccount,
-        startAt,
-        endAt,
-        waitForAllData,
-        keywords,
-      });
-
-      if (!topRankingPages) {
-        return null;
-      }
-
-      // Create an array to store all analytics data
-      const allAnalytics: webmasters_v3.Schema$ApiDataRow[] = [];
-
-      // Fetch data for all keywords at once instead of per-URL filtering
-      // This is more efficient as it reduces the number of API calls
-      const keywordAnalytics = await searchConsoleService.getAnalytics({
-        campaign,
-        googleAccount,
-        startAt: startAt,
-        endAt: endAt,
-        dimensions: ['date', 'query', 'page'],
-        waitForAllData,
-        exactUrlMatch: false, // Don't filter by exact URL match
-        topRankingPageUrl: undefined, // No specific top ranking page URL
-      });
-
-      if (keywordAnalytics) {
-        // Filter to only include our target keywords
-        const filteredAnalytics = keywordAnalytics.filter((row) => {
-          if (row.keys && row.keys.length >= 3) {
-            const query = row.keys[1];
-            return keywords.includes(query);
-          }
-          return false;
-        });
-
-        allAnalytics.push(...filteredAnalytics);
-      }
-
-      if (allAnalytics.length === 0) {
-        return null;
-      }
-
-      return allAnalytics;
-    } catch (error) {
-      console.error('Error fetching daily keywords data:', error);
-      return null;
-    }
-  }
-
-  /**
-   * Save daily keyword positions to the database
-   */
-  private async saveDailyKeywordsData(
-    dailyKeywordsData: webmasters_v3.Schema$ApiDataRow[],
-    campaign: Campaign
-  ): Promise<void> {
-    try {
-      const siteUrl = campaign.searchConsoleSite;
-      const targetDate = moment().subtract(3, 'days').startOf('day');
-      const targetDateString = targetDate.format('YYYY-MM-DD');
-
-      // Find existing analytics record
-      const analytics = await prisma.searchConsoleKeywordAnalytics.findFirst({
-        where: { siteUrl },
-      });
-
-      if (!analytics) {
-        return;
-      }
-
-      // Get all keywords from the campaign
-      const keywords = this.parseCampaignKeywords(campaign);
-
-      // Process each keyword
-      for (const keyword of keywords) {
-        const trimmedKeyword = keyword.trim();
-        if (!trimmedKeyword) continue;
-
-        // Ensure the keyword record exists
-        const keywordRecord = await prisma.searchConsoleKeyword.upsert({
-          where: {
-            analyticsId_keyword: {
-              analyticsId: analytics.id,
-              keyword: trimmedKeyword,
-            },
-          },
-          update: {
-            updatedAt: new Date(),
-          },
-          create: {
-            analyticsId: analytics.id,
-            keyword: trimmedKeyword,
-            initialPosition: 0,
-          },
-        });
-
-        // Check if daily data already exists for this date
-        const existingDailyStat =
-          await prisma.searchConsoleKeywordDailyStat.findUnique({
-            where: {
-              keywordId_date: {
-                keywordId: keywordRecord.id,
-                date: targetDate.toDate(),
-              },
-            },
-          });
-
-        // Find position data for this keyword and target date
-        // Now we expect data to have date, query, and page dimensions
-        const positionData = dailyKeywordsData.find(
-          (row) =>
-            row.keys &&
-            row.keys.length >= 3 &&
-            row.keys[0] === targetDateString &&
-            row.keys[1] === trimmedKeyword
-        );
-
-        if (!positionData) {
-          continue;
-        }
-
-        const topPageUrl = positionData.keys?.[2] || '';
-
-        // Upsert daily stat to database with both averageRank and topRankingPageUrl
-        await prisma.searchConsoleKeywordDailyStat.upsert({
-          where: {
-            keywordId_date: {
-              keywordId: keywordRecord.id,
-              date: targetDate.toDate(),
-            },
-          },
-          update: {
-            averageRank: positionData.position || 0, // Weighted average position across all pages
-            searchVolume: positionData.impressions || 0, // Total impressions across all pages
-            topRankingPageUrl: topPageUrl, // Top page by impressions
-            updatedAt: new Date(),
-          },
-          create: {
-            keywordId: keywordRecord.id,
-            date: targetDate.toDate(),
-            averageRank: positionData.position || 0, // Weighted average position across all pages
-            searchVolume: positionData.impressions || 0, // Total impressions across all pages
-            topRankingPageUrl: topPageUrl, // Top page by impressions
-          },
-        });
-      }
-    } catch (error) {
-      console.error('Error saving daily keywords data:', error);
-    }
-  }
-
-  /**
-   * Save historical daily keyword positions to the database
-   * This method processes data for a date range and handles multiple dates
-   */
-  private async saveHistoricalDailyKeywords(
-    dailyKeywordsData: webmasters_v3.Schema$ApiDataRow[],
-    campaign: Campaign,
-    startAt: moment.Moment,
-    endAt: moment.Moment
-  ): Promise<void> {
-    try {
-      const siteUrl = campaign.searchConsoleSite;
-
-      // Find existing analytics record or create a new one
-      let analytics = await prisma.searchConsoleKeywordAnalytics.findFirst({
-        where: { siteUrl },
-      });
-
-      if (!analytics) {
-        analytics = await prisma.searchConsoleKeywordAnalytics.create({
-          data: { siteUrl },
-        });
-      }
-
-      // Get all keywords from the campaign
-      const keywords = this.parseCampaignKeywords(campaign);
-
-      // First, ensure all campaign keywords exist in the database
-      for (const keyword of keywords) {
-        const trimmedKeyword = keyword.trim();
-        if (!trimmedKeyword) continue;
-
-        await prisma.searchConsoleKeyword.upsert({
-          where: {
-            analyticsId_keyword: {
-              analyticsId: analytics.id,
-              keyword: trimmedKeyword,
-            },
-          },
-          update: {
-            updatedAt: new Date(),
-          },
-          create: {
-            analyticsId: analytics.id,
-            keyword: trimmedKeyword,
-            initialPosition: 0,
-          },
-        });
-      }
-
-      // Process each row of data
-      for (const row of dailyKeywordsData) {
-        if (!row.keys || row.keys.length < 2) continue;
-
-        const dateString = row.keys[0];
-        const query = row.keys[1];
-
-        // Only process data for our target keywords
-        if (!keywords.includes(query)) continue;
-
-        // Find the keyword record (it should exist now from the upsert above)
-        const keywordRecord = await prisma.searchConsoleKeyword.findUnique({
-          where: {
-            analyticsId_keyword: {
-              analyticsId: analytics.id,
-              keyword: query,
-            },
-          },
-        });
-
-        if (!keywordRecord) {
-          console.warn(`Keyword record not found for: ${query}`);
-          continue;
-        }
-
-        const date = moment
-          .utc(dateString, 'YYYY-MM-DD')
-          .startOf('day')
-          .toDate();
-
-        // We now expect all data to have date, query, and page dimensions
-        // The data has already been aggregated using GSC's methodology in aggregateDataByDateAndQuery
-        if (row.keys && row.keys.length >= 3) {
-          const topPageUrl = row.keys[2]; // Top page by impressions
-
-          // Save both averageRank and topRankingPageUrl in one operation
-          await prisma.searchConsoleKeywordDailyStat.upsert({
-            where: {
-              keywordId_date: {
-                keywordId: keywordRecord.id,
-                date: date,
-              },
-            },
-            update: {
-              averageRank: row.position || 0, // Weighted average position across all pages
-              searchVolume: row.impressions || 0, // Total impressions across all pages
-              topRankingPageUrl: topPageUrl || '', // Top page by impressions
-              updatedAt: new Date(),
-            },
-            create: {
-              keywordId: keywordRecord.id,
-              date: date,
-              averageRank: row.position || 0, // Weighted average position across all pages
-              searchVolume: row.impressions || 0, // Total impressions across all pages
-              topRankingPageUrl: topPageUrl || '', // Top page by impressions
-            },
-          });
-        }
-      }
-    } catch (error) {
-      console.error('Error saving historical daily keywords data:', error);
     }
   }
 
@@ -2628,6 +2355,339 @@ export class AnalyticsService {
     } catch (error) {
       console.error('Error checking month completeness:', error);
       return false;
+    }
+  }
+
+  /**
+   * Compute monthly metrics for all months that have daily data for a campaign
+   */
+  async computeMonthlyMetricsForCampaign(campaignId: string): Promise<void> {
+    // Documentation:
+    // Computes missing per-month keyword metrics for a campaign by scanning
+    // which months have daily stats, then delegating to computeAndPersistMonthlyMetrics.
+    // This avoids per-refresh GSC calls by ensuring DB has the monthly aggregates.
+    try {
+      const campaign = await prisma.campaign.findUnique({
+        where: { id: campaignId },
+      });
+
+      if (!campaign) {
+        throw new Error('Campaign not found');
+      }
+
+      // Get all keywords for this campaign
+      const analytics = await prisma.searchConsoleKeywordAnalytics.findFirst({
+        where: { siteUrl: campaign.searchConsoleSite },
+        include: {
+          keywords: {
+            include: {
+              dailyStats: {
+                orderBy: { date: 'asc' },
+              },
+            },
+          },
+        },
+      });
+
+      if (!analytics || !analytics.keywords.length) {
+        console.log(`No keywords found for campaign ${campaignId}`);
+        return;
+      }
+
+      // Get all unique months that have daily data
+      const monthsWithData = new Set<string>();
+
+      analytics.keywords.forEach((keyword) => {
+        keyword.dailyStats.forEach((stat) => {
+          if (stat && stat.date) {
+            const date = new Date(stat.date);
+            const monthKey = `${date.getMonth() + 1}/${date.getFullYear()}`;
+            monthsWithData.add(monthKey);
+          }
+        });
+      });
+
+      console.log(
+        `Computing monthly metrics for ${monthsWithData.size} months for campaign ${campaign.name}`
+      );
+
+      // Compute monthly metrics for each month (idempotent via upsert)
+      for (const monthKey of monthsWithData) {
+        const [month, year] = monthKey.split('/').map(Number);
+        console.log(`Computing monthly data for ${month}/${year}`);
+        await this.computeAndPersistMonthlyMetrics(campaignId, month, year);
+      }
+    } catch (error) {
+      console.error('Error computing monthly metrics for campaign:', error);
+    }
+  }
+
+  /**
+   * Compute and persist monthly keyword metrics for a campaign
+   */
+  async computeAndPersistMonthlyMetrics(
+    campaignId: string,
+    month: number,
+    year: number
+  ): Promise<void> {
+    // Documentation:
+    // For a given campaign and (month, year):
+    // 1) Fetch raw GSC rows with dimensions ['date','query','page'] for the window
+    //    (current month → all available days; past months → last 7 days).
+    // 2) For each keyword, select the top page across the window by total impressions
+    //    with deterministic tie-breakers (daysWithData → clicks → better avg pos →
+    //    no-hash → shorter URL → lexicographic).
+    // 3) Compute weighted average position using ONLY that page’s rows.
+    // 4) Upsert into SearchConsoleKeywordMonthlyComputed:
+    //    { topRankingPageUrl, averageRank, impressions, clicks, calcWindowDays }.
+    // This persists monthly metrics to be read by API/UI without calling GSC.
+    try {
+      const campaign = await prisma.campaign.findUnique({
+        where: { id: campaignId },
+        include: { googleAccount: true },
+      });
+
+      if (!campaign || !campaign.googleAccount) {
+        throw new Error('Campaign or Google account not found');
+      }
+
+      // Get the first and last day of the month
+      const startDate = new Date(year, month - 1, 1);
+      let endDate = new Date(year, month, 0); // Last day of month
+
+      // For past months, use only the last 7 days
+      const currentMonth = new Date().getMonth() + 1;
+      const currentYear = new Date().getFullYear();
+      const isCurrentMonth = month === currentMonth && year === currentYear;
+
+      if (!isCurrentMonth) {
+        const lastDayOfMonth = new Date(year, month, 0);
+        startDate.setDate(lastDayOfMonth.getDate() - 6); // Last 7 days
+      }
+
+      // Format dates for GSC API
+      const startDateStr = startDate.toISOString().split('T')[0];
+      const endDateStr = endDate.toISOString().split('T')[0];
+
+      // Get all keywords for this campaign
+      const analytics = await prisma.searchConsoleKeywordAnalytics.findFirst({
+        where: { siteUrl: campaign.searchConsoleSite },
+        include: {
+          keywords: true,
+        },
+      });
+
+      if (!analytics || !analytics.keywords.length) {
+        console.log(`No keywords found for campaign ${campaignId}`);
+        return;
+      }
+
+      // Process each keyword
+      for (const keyword of analytics.keywords) {
+        try {
+          // Fetch raw GSC data for this specific month and keyword
+          const rawData = await searchConsoleService.getAnalytics({
+            campaign,
+            googleAccount: campaign.googleAccount,
+            startAt: moment.utc(startDateStr),
+            endAt: moment.utc(endDateStr),
+            dimensions: ['date', 'query', 'page'],
+            waitForAllData: true,
+            exactUrlMatch: false,
+            topRankingPageUrl: undefined,
+          });
+
+          // Filter for this specific keyword
+          const keywordRows =
+            rawData?.filter((row: any) => {
+              return (
+                row.keys &&
+                row.keys.length >= 3 &&
+                row.keys[1] === keyword.keyword
+              );
+            }) || [];
+
+          if (keywordRows.length === 0) {
+            // No data for this keyword in this month
+            await prisma.searchConsoleKeywordMonthlyComputed.upsert({
+              where: {
+                keywordId_month_year: {
+                  keywordId: keyword.id,
+                  month,
+                  year,
+                },
+              },
+              update: {
+                topRankingPageUrl: '',
+                averageRank: 0,
+                impressions: 0,
+                clicks: 0,
+                calcWindowDays: 0,
+              },
+              create: {
+                keywordId: keyword.id,
+                month,
+                year,
+                topRankingPageUrl: '',
+                averageRank: 0,
+                impressions: 0,
+                clicks: 0,
+                calcWindowDays: 0,
+              },
+            });
+            continue;
+          }
+
+          // Group by page and calculate total impressions per page
+          const pageImpressions: Record<string, number> = {};
+          const pageData: Record<
+            string,
+            {
+              impressions: number;
+              clicks: number;
+              weightedPositionSum: number;
+              daysWithData: number;
+            }
+          > = {};
+
+          keywordRows.forEach((row: any) => {
+            const page = row.keys[2];
+            const impressions = row.impressions || 0;
+            const clicks = row.clicks || 0;
+            const position = row.position || 0;
+
+            if (!pageImpressions[page]) {
+              pageImpressions[page] = 0;
+              pageData[page] = {
+                impressions: 0,
+                clicks: 0,
+                weightedPositionSum: 0,
+                daysWithData: 0,
+              };
+            }
+
+            pageImpressions[page] += impressions;
+            pageData[page].impressions += impressions;
+            pageData[page].clicks += clicks;
+            pageData[page].weightedPositionSum += position * impressions;
+            pageData[page].daysWithData++;
+          });
+
+          // Find the page with highest total impressions, with tie-breaking rules
+          let topPageUrl = '';
+          let maxImpressions = -1;
+          let bestPageDays = -1;
+          let bestPageClicks = -1;
+          let bestPagePosition = Infinity;
+          let bestPageLength = Infinity;
+
+          Object.entries(pageImpressions).forEach(([page, impressions]) => {
+            const data = pageData[page];
+            const avgPosition =
+              data.impressions > 0
+                ? data.weightedPositionSum / data.impressions
+                : Infinity;
+
+            if (
+              impressions > maxImpressions ||
+              (impressions === maxImpressions &&
+                data.daysWithData > bestPageDays) ||
+              (impressions === maxImpressions &&
+                data.daysWithData === bestPageDays &&
+                data.clicks > bestPageClicks) ||
+              (impressions === maxImpressions &&
+                data.daysWithData === bestPageDays &&
+                data.clicks === bestPageClicks &&
+                avgPosition < bestPagePosition) ||
+              (impressions === maxImpressions &&
+                data.daysWithData === bestPageDays &&
+                data.clicks === bestPageClicks &&
+                avgPosition === bestPagePosition &&
+                !page.includes('#') &&
+                topPageUrl.includes('#')) || // Prefer no-hash over hash
+              (impressions === maxImpressions &&
+                data.daysWithData === bestPageDays &&
+                data.clicks === bestPageClicks &&
+                avgPosition === bestPagePosition &&
+                page.length < bestPageLength) || // Prefer shorter URL
+              (impressions === maxImpressions &&
+                data.daysWithData === bestPageDays &&
+                data.clicks === bestPageClicks &&
+                avgPosition === bestPagePosition &&
+                page.length === bestPageLength &&
+                page < topPageUrl) // Lexicographical tie-break
+            ) {
+              maxImpressions = impressions;
+              topPageUrl = page;
+              bestPageDays = data.daysWithData;
+              bestPageClicks = data.clicks;
+              bestPagePosition = avgPosition;
+              bestPageLength = page.length;
+            }
+          });
+
+          // Calculate monthly position for the top page only
+          let monthlyPosition = 0;
+          let totalImpressions = 0;
+          let totalClicks = 0;
+          let calcWindowDays = 0;
+
+          if (topPageUrl && pageData[topPageUrl]) {
+            const topPageData = pageData[topPageUrl];
+            monthlyPosition =
+              topPageData.impressions > 0
+                ? topPageData.weightedPositionSum / topPageData.impressions
+                : 0;
+            totalImpressions = topPageData.impressions;
+            totalClicks = topPageData.clicks;
+            calcWindowDays = topPageData.daysWithData;
+          }
+
+          // Persist the computed metrics
+          await prisma.searchConsoleKeywordMonthlyComputed.upsert({
+            where: {
+              keywordId_month_year: {
+                keywordId: keyword.id,
+                month,
+                year,
+              },
+            },
+            update: {
+              topRankingPageUrl: topPageUrl,
+              averageRank: monthlyPosition,
+              impressions: totalImpressions,
+              clicks: totalClicks,
+              calcWindowDays,
+            },
+            create: {
+              keywordId: keyword.id,
+              month,
+              year,
+              topRankingPageUrl: topPageUrl,
+              averageRank: monthlyPosition,
+              impressions: totalImpressions,
+              clicks: totalClicks,
+              calcWindowDays,
+            },
+          });
+
+          console.log(
+            `Computed monthly metrics for keyword "${
+              keyword.keyword
+            }" in ${month}/${year}: position ${monthlyPosition.toFixed(
+              2
+            )}, page: ${topPageUrl}`
+          );
+        } catch (error) {
+          console.error(
+            `Error computing monthly metrics for keyword "${keyword.keyword}" in ${month}/${year}:`,
+            error
+          );
+        }
+      }
+    } catch (error) {
+      console.error('Error in computeAndPersistMonthlyMetrics:', error);
+      throw error;
     }
   }
 }
