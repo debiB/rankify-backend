@@ -2,89 +2,63 @@ import { z } from 'zod';
 import { router, protectedProcedure } from '../context';
 import { keywordCannibalizationService } from '../../services/keywordCannibalization';
 
-// Define AuditType enum 
-export enum AuditType {
-  INITIAL = 'INITIAL',
-  SCHEDULED = 'SCHEDULED'
-}
 
 export const cannibalizationRouter = router({
 
   /**
-   * Run initial audit (3 months of data)
+   * Run audit with custom date range
    */
-  runInitialAudit: protectedProcedure
+  runAudit: protectedProcedure
     .input(
       z.object({
         campaignId: z.string(),
+        startDate: z.string().transform((str) => new Date(str)),
+        endDate: z.string().transform((str) => new Date(str)),
       })
     )
     .mutation(async ({ input }) => {
-      const auditId = await keywordCannibalizationService.runInitialAudit(input.campaignId);
-      return { auditId };
-    }),
-
-  /**
-   * Run scheduled audit (2 weeks of data)
-   */
-  runScheduledAudit: protectedProcedure
-    .input(
-      z.object({
-        campaignId: z.string(),
-      })
-    )
-    .mutation(async ({ input }) => {
-      const auditId = await keywordCannibalizationService.runScheduledAudit(input.campaignId);
+      const auditId = await keywordCannibalizationService.runCustomAudit(
+        input.campaignId,
+        input.startDate,
+        input.endDate
+      );
       return { auditId };
     }),
 
   /**
    * Get cannibalization results for a campaign
+   * Defaults to last 3 months if no date range provided
    */
   getResults: protectedProcedure
     .input(
       z.object({
         campaignId: z.string(),
         limit: z.number().min(1).max(100).optional().default(50),
+        startDate: z.string().optional().transform((str) => str ? new Date(str) : undefined),
+        endDate: z.string().optional().transform((str) => str ? new Date(str) : undefined),
       })
     )
     .query(async ({ input }) => {
+      // Default to last 3 months if no date range provided
+      let startDate = input.startDate;
+      let endDate = input.endDate;
+      
+      if (!startDate || !endDate) {
+        endDate = new Date();
+        startDate = new Date();
+        startDate.setMonth(startDate.getMonth() - 3);
+      }
+      
       const results = await keywordCannibalizationService.getCannibalizationResults(
         input.campaignId,
-        input.limit
+        input.limit,
+        startDate,
+        endDate
       );
       return results;
     }),
 
-  /**
-   * Get audit history for a campaign
-   */
-//   getAuditHistory: protectedProcedure
-//     .input(
-//       z.object({
-//         campaignId: z.string(),
-//         limit: z.number().min(1).max(50).optional().default(10),
-//       })
-//     )
-//     .query(async ({ input }) => {
-//       const history = await keywordCannibalizationService.getAuditHistory(
-//         input.campaignId,
-//         input.limit
-//       );
-//       return history;
-//     }),
 
-  /**
-   * Get campaigns that need scheduled audits
-   */
-  getCampaignsNeedingAudit: protectedProcedure.query(async () => {
-    const campaignIds = await keywordCannibalizationService.getCampaignsNeedingAudit();
-    return { campaignIds };
-  }),
-
-  /**
-   * Get detailed cannibalization data for a specific keyword
-   */
   getKeywordDetails: protectedProcedure
     .input(
       z.object({

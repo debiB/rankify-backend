@@ -69,13 +69,13 @@ export class CronService {
 
   /**
    * Setup keyword cannibalization audit job
-   * Runs every 2 weeks on Sunday at 3:00 AM UTC
+   * Runs daily at 4:00 AM UTC
    */
   private setupCannibalizationAuditJob(): void {
     cron.schedule(
-      '0 3 * * 0',
+      '0 4 * * *',
       async () => {
-        console.log('🕐 Starting bi-weekly cannibalization audit job...');
+        console.log('🕐 Starting daily cannibalization audit job...');
         await this.runCannibalizationAudits();
       },
       {
@@ -83,7 +83,7 @@ export class CronService {
       }
     );
 
-    console.log('📅 Cannibalization audit job scheduled: 3:00 AM UTC every Sunday');
+    console.log('📅 Cannibalization audit job scheduled: 4:00 AM UTC every day');
   }
 
   /**
@@ -105,7 +105,7 @@ export class CronService {
 
       // Run audits for each campaign
       const results = await Promise.allSettled(
-        campaignsNeedingAudit.map(async (campaignId) => {
+        campaignsNeedingAudit.map(async (campaignId: string) => {
           console.log(`🔄 Running cannibalization audit for campaign: ${campaignId}`);
 
           try {
@@ -130,7 +130,7 @@ export class CronService {
 
       // Log summary
       const successful = results.filter(
-        (result) => result.status === 'fulfilled' && result.value.success
+        (result: PromiseSettledResult<any>) => result.status === 'fulfilled' && result.value.success
       ).length;
       const failed = results.length - successful;
 
@@ -389,7 +389,7 @@ export class CronService {
       jobs: [
         'Monthly Analytics Fetch - 0 2 1 * * (2:00 AM UTC on 1st of every month)',
         'Daily Traffic Fetch - 0 6 * * * (6:00 AM UTC every day)',
-        'Cannibalization Audit - 0 3 * * 0 (3:00 AM UTC every Sunday)',
+        'Cannibalization Audit - 0 4 * * * (4:00 AM UTC every day)',
       ],
     };
   }

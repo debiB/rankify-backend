@@ -7,13 +7,10 @@ const prisma = new PrismaClient();
 const searchConsoleService = new SearchConsoleService();
 
 const CANNIBALIZATION_THRESHOLD = 20; // 20% overlap threshold
-const INITIAL_AUDIT_MONTHS = 3; // 3 months for initial audit
-const SCHEDULED_AUDIT_WEEKS = 2; // 2 weeks for scheduled audits
 
 // Define enums 
 enum AuditType {
-  INITIAL = 'INITIAL',
-  SCHEDULED = 'SCHEDULED'
+  CUSTOM = 'CUSTOM'
 }
 
 enum AuditStatus {
@@ -51,10 +48,10 @@ interface CannibalizationData {
 export class KeywordCannibalizationService {
   
   /**
-   * Run a full keyword cannibalization audit for a campaign
+   * Run a full keyword cannibalization audit for a campaign with custom date range
    */
-  async runAudit(campaignId: string, auditType: AuditType = AuditType.SCHEDULED): Promise<string> {
-    console.log(`Starting ${auditType} cannibalization audit for campaign ${campaignId}`);
+  async runAudit(campaignId: string, startDate: Date, endDate: Date): Promise<string> {
+    console.log(`Starting custom cannibalization audit for campaign ${campaignId} from ${startDate.toISOString()} to ${endDate.toISOString()}`);
     
     const campaign = await prisma.campaign.findUnique({
       where: { id: campaignId },
@@ -69,16 +66,13 @@ export class KeywordCannibalizationService {
       throw new Error('Google account not found for campaign');
     }
 
-    // Calculate date range based on audit type
-    const { startDate, endDate } = this.calculateDateRange(auditType);
-
     // Create audit record
     const audit = await (prisma as any).keywordCannibalizationAudit.create({
       data: {
         campaignId,
         startDate,
         endDate,
-        auditType,
+        auditType: AuditType.CUSTOM,
         status: AuditStatus.RUNNING
       }
     });
@@ -130,25 +124,6 @@ export class KeywordCannibalizationService {
     }
   }
 
-  /**
-   * Calculate date range based on audit type
-   */
-  private calculateDateRange(auditType: AuditType): { startDate: Date; endDate: Date } {
-    const now = moment().tz('America/Los_Angeles');
-    const endDate = now.subtract(3, 'days').endOf('day').toDate(); // Account for GSC 3-day delay
-    
-    let startDate: Date;
-    
-    if (auditType === AuditType.INITIAL) {
-      // Initial audit: last 3 months
-      startDate = moment(endDate).subtract(INITIAL_AUDIT_MONTHS, 'months').startOf('day').toDate();
-    } else {
-      // Scheduled audit: last 2 weeks
-      startDate = moment(endDate).subtract(SCHEDULED_AUDIT_WEEKS, 'weeks').startOf('day').toDate();
-    }
-    
-    return { startDate, endDate };
-  }
 
   /**
    * Fetch keyword and page data from Google Search Console
@@ -190,7 +165,8 @@ export class KeywordCannibalizationService {
       return [];
     }
 
-    const keywordPageData: KeywordPageData[] = [];
+    // Use a Map to aggregate impressions by keyword-page combination
+    const keywordPageMap = new Map<string, { keyword: string; pageUrl: string; impressions: number }>();
     let totalRows = 0;
     let validRows = 0;
     let keywordFilteredOut = 0;
@@ -218,24 +194,37 @@ export class KeywordCannibalizationService {
       }
 
       validRows++;
-      keywordPageData.push({
-        keyword: normalizedKeyword,
-        pageUrl,
-        impressions: row.impressions || 0
-      });
+      
+      // Create a unique key for keyword-page combination
+      const mapKey = `${normalizedKeyword}|${pageUrl}`;
+      
+      // Aggregate impressions for the same keyword-page combination across all dates
+      if (keywordPageMap.has(mapKey)) {
+        const existing = keywordPageMap.get(mapKey)!;
+        existing.impressions += (row.impressions || 0);
+      } else {
+        keywordPageMap.set(mapKey, {
+          keyword: normalizedKeyword,
+          pageUrl,
+          impressions: row.impressions || 0
+        });
+      }
     }
+
+    // Convert map back to array
+    const keywordPageData: KeywordPageData[] = Array.from(keywordPageMap.values());
 
     console.log(`📊 Processing Summary:`);
     console.log(`   Total rows from GSC: ${totalRows}`);
     console.log(`   Keywords filtered out (not in campaign): ${keywordFilteredOut}`);
     console.log(`   Valid rows processed: ${validRows}`);
-    console.log(`   Final keyword-page combinations: ${keywordPageData.length}`);
+    console.log(`   Unique keyword-page combinations after aggregation: ${keywordPageData.length}`);
 
-    // Log sample of processed data
+    // Log sample of aggregated data
     if (keywordPageData.length > 0) {
-      console.log(`📝 Sample processed data (first 3):`);
+      console.log(`📝 Sample aggregated data (first 3):`);
       keywordPageData.slice(0, 3).forEach((item, index) => {
-        console.log(`  ${index + 1}. "${item.keyword}" -> ${item.pageUrl} (${item.impressions} impressions)`);
+        console.log(`  ${index + 1}. "${item.keyword}" -> ${item.pageUrl} (${item.impressions} total impressions)`);
       });
     }
     
@@ -287,22 +276,11 @@ export class KeywordCannibalizationService {
         continue;
       }
 
-      // Aggregate impressions by page (sum across all data points for the same page)
-      const pageAggregates = new Map<string, { impressions: number; count: number }>();
-      
-      for (const page of pages) {
-        if (!pageAggregates.has(page.pageUrl)) {
-          pageAggregates.set(page.pageUrl, { impressions: 0, count: 0 });
-        }
-        const aggregate = pageAggregates.get(page.pageUrl)!;
-        aggregate.impressions += page.impressions;
-        aggregate.count++;
-      }
-
-      // Convert to array and sort by impressions
-      const aggregatedPages = Array.from(pageAggregates.entries()).map(([url, data]) => ({
-        url,
-        impressions: data.impressions
+      // Data is already aggregated by keyword-page combination in fetchKeywordPageData
+      // Just sort by impressions
+      const aggregatedPages = pages.map(page => ({
+        url: page.pageUrl,
+        impressions: page.impressions
       })).sort((a, b) => b.impressions - a.impressions);
 
       if (aggregatedPages.length <= 1) {
@@ -380,12 +358,38 @@ export class KeywordCannibalizationService {
   /**
    * Get cannibalization results for a campaign
    */
-  async getCannibalizationResults(campaignId: string, limit: number = 50) {
+  async getCannibalizationResults(
+    campaignId: string, 
+    limit: number = 50, 
+    startDate?: Date, 
+    endDate?: Date
+  ) {
+    // Build where clause for audit filtering
+    const auditWhere: any = { 
+      campaignId,
+      status: AuditStatus.COMPLETED
+    };
+
+    // If date range is provided, find audits that overlap with this date range
+    // We want audits where the audit period overlaps with our requested period
+    if (startDate && endDate) {
+      auditWhere.AND = [
+        { 
+          OR: [
+            // Audit starts before our end date AND audit ends after our start date
+            {
+              AND: [
+                { startDate: { lte: endDate } },
+                { endDate: { gte: startDate } }
+              ]
+            }
+          ]
+        }
+      ];
+    }
+
     const existingAudit = await (prisma as any).keywordCannibalizationAudit.findFirst({
-      where: { 
-        campaignId,
-        status: AuditStatus.COMPLETED
-      },
+      where: auditWhere,
       orderBy: { createdAt: 'desc' },
       include: {
         results: {
@@ -435,50 +439,55 @@ export class KeywordCannibalizationService {
   }
 
   /**
-   * Run initial audit for a campaign (3 months of data)
+   * Run audit with custom date range
+   */
+  async runCustomAudit(campaignId: string, startDate: Date, endDate: Date): Promise<string> {
+    return this.runAudit(campaignId, startDate, endDate);
+  }
+
+  /**
+   * Run initial cannibalization audit for a new campaign (3 months of data)
    */
   async runInitialAudit(campaignId: string): Promise<string> {
-    return this.runAudit(campaignId, AuditType.INITIAL);
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setMonth(startDate.getMonth() - 3); // 3 months ago
+    
+    console.log(`Running initial cannibalization audit for campaign ${campaignId} with 3 months of data (${startDate.toISOString()} to ${endDate.toISOString()})`);
+    
+    return this.runAudit(campaignId, startDate, endDate);
   }
 
   /**
-   * Run scheduled audit for a campaign (2 weeks of data)
+   * Run scheduled cannibalization audit for daily cron job (2 weeks of data)
    */
   async runScheduledAudit(campaignId: string): Promise<string> {
-    return this.runAudit(campaignId, AuditType.SCHEDULED);
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - 14); // 2 weeks ago
+    
+    console.log(`Running scheduled cannibalization audit for campaign ${campaignId} with 2 weeks of data (${startDate.toISOString()} to ${endDate.toISOString()})`);
+    
+    return this.runAudit(campaignId, startDate, endDate);
   }
 
   /**
-   * Get campaigns that need scheduled audits (every 2 weeks)
+   * Get campaigns that need daily cannibalization audits
+   * Returns all active campaigns
    */
   async getCampaignsNeedingAudit(): Promise<string[]> {
-    const twoWeeksAgo = moment().subtract(2, 'weeks').toDate();
-    
-    // Get all active campaigns
     const campaigns = await prisma.campaign.findMany({
-      where: { status: 'ACTIVE' },
-      select: { id: true }
-    });
-
-    const campaignsNeedingAudit = [];
-
-    for (const campaign of campaigns) {
-      // Check if campaign has had an audit in the last 2 weeks
-        const recentAudit = await prisma.keywordCannibalizationAudit.findFirst({
-        where: {
-          campaignId: campaign.id,
-          createdAt: { gte: twoWeeksAgo },
-          status: { in: [AuditStatus.COMPLETED, AuditStatus.RUNNING] }
-        }
-      });
-
-      if (!recentAudit) {
-        campaignsNeedingAudit.push(campaign.id);
+      where: {
+        status: 'ACTIVE'
+      },
+      select: {
+        id: true
       }
-    }
-
-    return campaignsNeedingAudit;
+    });
+    
+    return campaigns.map(campaign => campaign.id);
   }
+
 }
 
 export const keywordCannibalizationService = new KeywordCannibalizationService();
