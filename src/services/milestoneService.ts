@@ -406,6 +406,7 @@ export class MilestoneService {
           include: {
             user: {
               select: {
+                id: true,
                 email: true,
                 name: true,
                 status: true,
@@ -417,12 +418,23 @@ export class MilestoneService {
         // Send emails to users with preferences for this campaign
         for (const emailPref of emailPreferences) {
           if (emailPref.user.status === 'ACTIVE') {
-            await this.emailTransporter.sendMail({
-              from: process.env.SMTP_FROM || process.env.SMTP_USER,
-              to: emailPref.user.email,
-              subject: emailSubject,
-              html: emailBody,
+            // Check user's individual notification preferences
+            const userNotificationPrefs = await prisma.userNotificationPreferences.findUnique({
+              where: { userId: emailPref.user.id },
             });
+
+            // Only send if user has email notifications enabled (default to true if no preferences set)
+            const shouldSendEmail = !userNotificationPrefs || 
+              (userNotificationPrefs.enableAllNotifications && userNotificationPrefs.enableEmail);
+
+            if (shouldSendEmail) {
+              await this.emailTransporter.sendMail({
+                from: process.env.SMTP_FROM || process.env.SMTP_USER,
+                to: emailPref.user.email,
+                subject: emailSubject,
+                html: emailBody,
+              });
+            }
           }
         }
 
@@ -430,12 +442,23 @@ export class MilestoneService {
         if (emailPreferences.length === 0) {
           for (const campaignUser of campaign.campaignUsers) {
             if (campaignUser.user.status === 'ACTIVE') {
-              await this.emailTransporter.sendMail({
-                from: process.env.SMTP_FROM || process.env.SMTP_USER,
-                to: campaignUser.user.email,
-                subject: emailSubject,
-                html: emailBody,
+              // Check user's individual notification preferences
+              const userNotificationPrefs = await prisma.userNotificationPreferences.findUnique({
+                where: { userId: campaignUser.user.id },
               });
+
+              // Only send if user has email notifications enabled (default to true if no preferences set)
+              const shouldSendEmail = !userNotificationPrefs || 
+                (userNotificationPrefs.enableAllNotifications && userNotificationPrefs.enableEmail);
+
+              if (shouldSendEmail) {
+                await this.emailTransporter.sendMail({
+                  from: process.env.SMTP_FROM || process.env.SMTP_USER,
+                  to: campaignUser.user.email,
+                  subject: emailSubject,
+                  html: emailBody,
+                });
+              }
             }
           }
         }

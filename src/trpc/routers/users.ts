@@ -420,4 +420,94 @@ export const usersRouter = router({
       data: users,
     };
   }),
+
+  // Get user notification preferences
+  getNotificationPreferences: protectedProcedure
+    .input(z.object({ userId: z.string() }))
+    .query(async ({ input, ctx }) => {
+      const { userId } = input;
+
+      // Only allow users to get their own preferences or admins to get any user's preferences
+      if (ctx.user?.role !== 'ADMIN' && ctx.user?.id !== userId) {
+        throw new Error('Unauthorized');
+      }
+
+      const preferences = await prisma.userNotificationPreferences.findUnique({
+        where: { userId },
+      });
+
+      // If no preferences exist, return defaults
+      if (!preferences) {
+        return {
+          success: true,
+          data: {
+            enableEmail: true,
+            enableWhatsApp: true,
+            enableAllNotifications: true,
+          },
+        };
+      }
+
+      return {
+        success: true,
+        data: {
+          enableEmail: preferences.enableEmail,
+          enableWhatsApp: preferences.enableWhatsApp,
+          enableAllNotifications: preferences.enableAllNotifications,
+        },
+      };
+    }),
+
+  // Set user notification preferences
+  setNotificationPreferences: protectedProcedure
+    .input(
+      z.object({
+        userId: z.string(),
+        enableEmail: z.boolean(),
+        enableWhatsApp: z.boolean(),
+        enableAllNotifications: z.boolean(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const { userId, enableEmail, enableWhatsApp, enableAllNotifications } = input;
+
+      // Only allow users to update their own preferences or admins to update any user's preferences
+      if (ctx.user?.role !== 'ADMIN' && ctx.user?.id !== userId) {
+        throw new Error('Unauthorized');
+      }
+
+      // Verify user exists
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+      });
+
+      if (!user) {
+        throw new Error('User not found');
+      }
+
+      // Upsert notification preferences
+      const preferences = await prisma.userNotificationPreferences.upsert({
+        where: { userId },
+        update: {
+          enableEmail,
+          enableWhatsApp,
+          enableAllNotifications,
+        },
+        create: {
+          userId,
+          enableEmail,
+          enableWhatsApp,
+          enableAllNotifications,
+        },
+      });
+
+      return {
+        success: true,
+        data: {
+          enableEmail: preferences.enableEmail,
+          enableWhatsApp: preferences.enableWhatsApp,
+          enableAllNotifications: preferences.enableAllNotifications,
+        },
+      };
+    }),
 });

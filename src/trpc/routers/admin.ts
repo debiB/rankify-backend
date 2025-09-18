@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
-import { adminProcedure, router } from '../context';
+import { adminProcedure, protectedProcedure, router } from '../context';
 import { prisma } from '../../utils/prisma';
 import { CronService } from '../../services/cronService';
 import { AnalyticsService } from '../../services/analytics';
@@ -432,11 +432,30 @@ export const adminRouter = router({
     }),
 
   // Get admin notification preferences
-  getNotificationPreferences: adminProcedure
-    .input(z.object({ userId: z.string() }))
-    .query(async ({ input }) => {
+  getNotificationPreferences: protectedProcedure
+    .input(z.object({ userId: z.string().optional() }))
+    .query(async ({ input, ctx }) => {
       try {
-        const { userId } = input;
+        let { userId } = input;
+
+        // If no userId provided, get the first admin user or use current user if admin
+        if (!userId) {
+          if (ctx.user?.role === 'ADMIN') {
+            userId = ctx.user.id;
+          } else {
+            // Find the first admin user
+            const firstAdmin = await prisma.user.findFirst({
+              where: { role: 'ADMIN' },
+            });
+            if (!firstAdmin) {
+              throw new TRPCError({
+                code: 'NOT_FOUND',
+                message: 'No admin user found.',
+              });
+            }
+            userId = firstAdmin.id;
+          }
+        }
 
         // Verify user is admin
         const user = await prisma.user.findUnique({
