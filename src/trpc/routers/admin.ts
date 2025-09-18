@@ -56,18 +56,18 @@ export const adminRouter = router({
         // 6) Traffic monthly (depend on traffic analytics)
         // 7) Traffic analytics
         // This order avoids FK constraint violations and ensures a clean wipe.
-        // 1. Delete all computed monthly keyword data first (they reference keywords)
+        // 1. Delete all monthly keyword stats first (they reference keywords)
         const deletedComputedMonthlyData =
-          await prisma.searchConsoleKeywordMonthlyComputed.deleteMany({});
-        console.log(
-          `Deleted ${deletedComputedMonthlyData.count} computed monthly keyword records`
-        );
-
-        // 2. Delete all keyword monthly stats (they reference keywords)
-        const deletedKeywordMonthlyStats =
           await prisma.searchConsoleKeywordMonthlyStat.deleteMany({});
         console.log(
-          `Deleted ${deletedKeywordMonthlyStats.count} keyword monthly stats`
+          `Deleted ${deletedComputedMonthlyData.count} monthly keyword stat records`
+        );
+
+        // 2. Delete all keyword daily stats (they reference keywords)
+        const deletedKeywordDailyStats =
+          await prisma.searchConsoleKeywordDailyStat.deleteMany({});
+        console.log(
+          `Deleted ${deletedKeywordDailyStats.count} keyword daily stats`
         );
 
         // 3. Delete all keywords (they reference analytics)
@@ -106,7 +106,7 @@ export const adminRouter = router({
 
         const totalDeleted =
           deletedComputedMonthlyData.count +
-          deletedKeywordMonthlyStats.count +
+          deletedKeywordDailyStats.count +
           deletedKeywords.count +
           deletedKeywordAnalytics.count +
           deletedTrafficDaily.count +
@@ -119,7 +119,7 @@ export const adminRouter = router({
           success: true,
           deletedRecords: {
             computedMonthlyData: deletedComputedMonthlyData.count,
-            keywordMonthlyStats: deletedKeywordMonthlyStats.count,
+            keywordDailyStats: deletedKeywordDailyStats.count,
             keywords: deletedKeywords.count,
             keywordAnalytics: deletedKeywordAnalytics.count,
             trafficDaily: deletedTrafficDaily.count,

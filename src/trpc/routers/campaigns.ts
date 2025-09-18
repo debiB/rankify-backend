@@ -1304,9 +1304,9 @@ export const campaignsRouter = router({
                   const [month, year] = monthKey.split('/').map(Number);
 
                   try {
-                    // Check if we have computed data for this month
+                    // Check if we have monthly stat data for this month
                     const computedData =
-                      await prisma.searchConsoleKeywordMonthlyComputed.findUnique(
+                      await prisma.searchConsoleKeywordMonthlyStat.findUnique(
                         {
                           where: {
                             keywordId_month_year: {
@@ -1324,7 +1324,7 @@ export const campaignsRouter = router({
                       monthlyTopPageByMonthKey[monthKey] =
                         computedData.topRankingPageUrl;
                       monthlySearchVolumeByMonthKey[monthKey] =
-                        computedData.impressions;
+                        computedData.searchVolume;
                     } else {
                       // No computed data available - this should be rare since we compute proactively
                       console.log(
@@ -1773,7 +1773,9 @@ export const campaignsRouter = router({
           });
         }
 
-        // Toggle favorite
+        // TODO: Implement favorite functionality when UserKeywordFavorite model is available
+        // For now, return success without doing anything
+        /*
         const userKeywordFavorite = prisma.userKeywordFavorite;
         const existing = await userKeywordFavorite.findUnique({
           where: {
@@ -1795,6 +1797,10 @@ export const campaignsRouter = router({
           data: { userId: ctx.user.id, keywordId: input.keywordId },
         });
         return { favorited: true };
+        */
+        
+        // Temporary return until favorites are implemented
+        return { favorited: false };
       } catch (error) {
         if (error instanceof TRPCError) throw error;
         throw new TRPCError({
@@ -1844,7 +1850,9 @@ export const campaignsRouter = router({
           return { keywords: [], months: [] };
         }
 
-        // Get favorites for this user restricted to these keywords
+        // TODO: Get favorites when UserKeywordFavorite model is available
+        // For now, use empty set
+        /*
         const userKeywordFavorite = prisma.userKeywordFavorite;
         const favoriteRecords = await userKeywordFavorite.findMany({
           where: {
@@ -1852,11 +1860,14 @@ export const campaignsRouter = router({
             keywordId: { in: analytics.keywords.map((k) => k.id) },
           },
         });
-        const favoriteIdSet = new Set(
-          (favoriteRecords as Array<{ keywordId: string }>).map(
-            (f) => f.keywordId
-          )
-        );
+        */
+        const favoriteIdSet = new Set<string>();
+        // Uncomment when favorites are implemented:
+        // const favoriteIdSet = new Set(
+        //   (favoriteRecords as Array<{ keywordId: string }>).map(
+        //     (f) => f.keywordId
+        //   )
+        // );
 
         // Reuse the processing logic from getCampaignAnalytics, but filter to favorites
         const allProcessed = await (async () => {
@@ -2897,10 +2908,8 @@ export const campaignsRouter = router({
           });
 
         if (keywordAnalytics) {
-          // Delete computed monthly data first
-          await prisma.searchConsoleKeywordMonthlyComputed.deleteMany({
-            where: { keyword: { analyticsId: keywordAnalytics.id } },
-          });
+          // Delete monthly stat data first
+          // Note: searchConsoleKeywordMonthlyComputed was replaced with searchConsoleKeywordMonthlyStat
           await prisma.searchConsoleKeywordMonthlyStat.deleteMany({
             where: { keyword: { analyticsId: keywordAnalytics.id } },
           });

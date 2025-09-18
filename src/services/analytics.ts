@@ -2509,7 +2509,7 @@ export class AnalyticsService {
 
           if (keywordRows.length === 0) {
             // No data for this keyword in this month
-            await prisma.searchConsoleKeywordMonthlyComputed.upsert({
+            await prisma.searchConsoleKeywordMonthlyStat.upsert({
               where: {
                 keywordId_month_year: {
                   keywordId: keyword.id,
@@ -2520,9 +2520,7 @@ export class AnalyticsService {
               update: {
                 topRankingPageUrl: '',
                 averageRank: 0,
-                impressions: 0,
-                clicks: 0,
-                calcWindowDays: 0,
+                searchVolume: 0,
               },
               create: {
                 keywordId: keyword.id,
@@ -2530,9 +2528,7 @@ export class AnalyticsService {
                 year,
                 topRankingPageUrl: '',
                 averageRank: 0,
-                impressions: 0,
-                clicks: 0,
-                calcWindowDays: 0,
+                searchVolume: 0,
               },
             });
             continue;
@@ -2644,7 +2640,7 @@ export class AnalyticsService {
           }
 
           // Persist the computed metrics
-          await prisma.searchConsoleKeywordMonthlyComputed.upsert({
+          await prisma.searchConsoleKeywordMonthlyStat.upsert({
             where: {
               keywordId_month_year: {
                 keywordId: keyword.id,
@@ -2655,9 +2651,7 @@ export class AnalyticsService {
             update: {
               topRankingPageUrl: topPageUrl,
               averageRank: monthlyPosition,
-              impressions: totalImpressions,
-              clicks: totalClicks,
-              calcWindowDays,
+              searchVolume: totalImpressions, // Using impressions as search volume
             },
             create: {
               keywordId: keyword.id,
@@ -2665,9 +2659,7 @@ export class AnalyticsService {
               year,
               topRankingPageUrl: topPageUrl,
               averageRank: monthlyPosition,
-              impressions: totalImpressions,
-              clicks: totalClicks,
-              calcWindowDays,
+              searchVolume: totalImpressions, // Using impressions as search volume
             },
           });
 
