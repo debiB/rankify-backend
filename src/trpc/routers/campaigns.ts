@@ -1433,6 +1433,7 @@ export const campaignsRouter = router({
 
               // Find the previous month stat for the selected month
               let previousMonthStat = null;
+              let previousMonthTopPage = '';
               if (selectedMonthStat && input.selectedMonth) {
                 // Find the month before the selected month
                 const selectedMonthParts = input.selectedMonth!.split(' ');
@@ -1466,12 +1467,13 @@ export const campaignsRouter = router({
 
                 const prevMonthKey = `${prevMonth}/${prevYear}`;
                 const prevMonthValue = monthlyData[prevMonthKey];
+                previousMonthTopPage = monthlyTopPageByMonthKey[prevMonthKey] || '';
 
                 if (prevMonthValue !== null && prevMonthValue !== undefined) {
                   previousMonthStat = {
                     averageRank: prevMonthValue,
                     searchVolume: 0,
-                    topRankingPageUrl: '',
+                    topRankingPageUrl: previousMonthTopPage,
                   };
                 }
               } else {
@@ -1562,6 +1564,31 @@ export const campaignsRouter = router({
               // The topPageLink is derived from the topRankingPageUrl which is determined by the page with the highest impressions
               // This ensures that for each keyword, we return both the keyword data and its corresponding top-ranking page
 
+              // Compare current and previous month's top pages to determine if changed
+              const currentTopPage = currentStat?.topRankingPageUrl || '';
+              const isTopPageChanged = (() => {
+                // Only compare if we have both current and previous month data
+                if (!currentTopPage || !previousMonthTopPage) {
+                  return false;
+                }
+                
+                // Normalize URLs for comparison (decode and remove trailing slashes)
+                const normalizeUrl = (url: string): string => {
+                  try {
+                    let normalized = decodeURIComponent(url).trim().toLowerCase();
+                    // Remove trailing slash for consistent comparison
+                    if (normalized.endsWith('/')) {
+                      normalized = normalized.slice(0, -1);
+                    }
+                    return normalized;
+                  } catch {
+                    return url.trim().toLowerCase();
+                  }
+                };
+                
+                return normalizeUrl(currentTopPage) !== normalizeUrl(previousMonthTopPage);
+              })();
+
               // Make sure all months from the global months array are included in each keyword's monthlyData
               const allMonths = Object.keys(monthlyData).sort((a, b) => {
                 const [monthA, yearA] = a.split('/').map(Number);
@@ -1588,6 +1615,8 @@ export const campaignsRouter = router({
                     return currentStat?.topRankingPageUrl || '';
                   }
                 })(),
+                // Add the comparison result for frontend use
+                isTopPageChanged: isTopPageChanged,
               };
             } catch (error) {
               console.error(
@@ -1608,6 +1637,7 @@ export const campaignsRouter = router({
                 position: 0,
                 searchVolume: 0,
                 topPageLink: '', // Empty string for top page link in error cases
+                isTopPageChanged: false, // Default to false in error cases
               };
             }
           })
@@ -2072,6 +2102,7 @@ export const campaignsRouter = router({
 
                 // Previous month stat if selected
                 let previousMonthStat: any = null;
+                let previousMonthTopPage = '';
                 if (selectedMonthStat && input.selectedMonth) {
                   const [name, yearStr] = input.selectedMonth.split(' ');
                   const monthNames = [
@@ -2097,11 +2128,13 @@ export const campaignsRouter = router({
                   }
                   const prevMonthKey = `${prevMonth}/${prevYear}`;
                   const prevMonthValue = monthlyData[prevMonthKey];
+                  previousMonthTopPage = monthlyTopPageByMonthKey[prevMonthKey] || '';
+                  
                   if (prevMonthValue !== null && prevMonthValue !== undefined) {
                     previousMonthStat = {
                       averageRank: prevMonthValue,
                       searchVolume: 0,
-                      topRankingPageUrl: '',
+                      topRankingPageUrl: previousMonthTopPage,
                     };
                   }
                 } else {
@@ -2179,6 +2212,31 @@ export const campaignsRouter = router({
                   searchVolume = 0;
                 }
 
+                // Compare current and previous month's top pages to determine if changed
+                const currentTopPage = currentStat?.topRankingPageUrl || '';
+                const isTopPageChanged = (() => {
+                  // Only compare if we have both current and previous month data
+                  if (!currentTopPage || !previousMonthTopPage) {
+                    return false;
+                  }
+                  
+                  // Normalize URLs for comparison (decode and remove trailing slashes)
+                  const normalizeUrl = (url: string): string => {
+                    try {
+                      let normalized = decodeURIComponent(url).trim().toLowerCase();
+                      // Remove trailing slash for consistent comparison
+                      if (normalized.endsWith('/')) {
+                        normalized = normalized.slice(0, -1);
+                      }
+                      return normalized;
+                    } catch {
+                      return url.trim().toLowerCase();
+                    }
+                  };
+                  
+                  return normalizeUrl(currentTopPage) !== normalizeUrl(previousMonthTopPage);
+                })();
+
                 return {
                   id: keyword.id,
                   keyword: keyword.keyword,
@@ -2196,6 +2254,7 @@ export const campaignsRouter = router({
                       return currentStat?.topRankingPageUrl || '';
                     }
                   })(),
+                  isTopPageChanged: isTopPageChanged,
                 };
               } catch (e) {
                 return {
@@ -2208,6 +2267,7 @@ export const campaignsRouter = router({
                   position: 0,
                   searchVolume: 0,
                   topPageLink: '',
+                  isTopPageChanged: false,
                 };
               }
             });
