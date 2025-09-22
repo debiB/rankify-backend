@@ -3023,4 +3023,772 @@ export const campaignsRouter = router({
         });
       }
     }),
+
+  // Get total number of keywords tracked in the campaign
+  getTotalKeywordsCount: protectedProcedure
+    .input(z.object({ campaignId: z.string() }))
+    .query(async ({ input, ctx }) => {
+      try {
+        const campaign = await prisma.campaign.findUnique({
+          where: { id: input.campaignId },
+        });
+
+        if (!campaign) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'Campaign not found',
+          });
+        }
+
+        // Check access permissions
+        if (ctx.user.role !== 'ADMIN' && campaign.userId !== ctx.user.id) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'You do not have permission to access this campaign',
+          });
+        }
+
+        // Get analytics data for this campaign
+        const analytics = await prisma.searchConsoleKeywordAnalytics.findFirst({
+          where: { siteUrl: campaign.searchConsoleSite },
+          include: {
+            keywords: true,
+          },
+        });
+
+        const totalKeywords = analytics?.keywords.length || 0;
+
+        return {
+          totalKeywords,
+          campaignId: input.campaignId,
+          campaignName: campaign.name,
+        };
+      } catch (error) {
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to get total keywords count',
+        });
+      }
+    }),
+
+  // Get keyword improvement/drop percentages vs last month
+  getKeywordMovementStats: protectedProcedure
+    .input(z.object({ campaignId: z.string() }))
+    .query(async ({ input, ctx }) => {
+      try {
+        const campaign = await prisma.campaign.findUnique({
+          where: { id: input.campaignId },
+        });
+
+        if (!campaign) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'Campaign not found',
+          });
+        }
+
+        // Check access permissions
+        if (ctx.user.role !== 'ADMIN' && campaign.userId !== ctx.user.id) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'You do not have permission to access this campaign',
+          });
+        }
+
+        // Get analytics data
+        const analytics = await prisma.searchConsoleKeywordAnalytics.findFirst({
+          where: { siteUrl: campaign.searchConsoleSite },
+          include: {
+            keywords: {
+              include: {
+                monthlyComputed: {
+                  orderBy: [{ year: 'desc' }, { month: 'desc' }],
+                  take: 2, // Get last 2 months for comparison
+                },
+              },
+            },
+          },
+        });
+
+        if (!analytics || analytics.keywords.length === 0) {
+          return {
+            totalKeywords: 0,
+            // Raw counts
+            improved: 0,
+            declined: 0,
+            unchanged: 0,
+            // Percentages
+            improvedPercentage: 0,
+            declinedPercentage: 0,
+            unchangedPercentage: 0,
+            // Summary stats
+            movementSummary: {
+              hasMovement: 0,
+              hasMovementPercentage: 0,
+              improvementRatio: 0,
+            },
+            // Detailed breakdown
+            breakdown: {
+              improving: {
+                count: 0,
+                percentage: 0,
+                description: 'Keywords that moved to better positions (lower rank numbers)'
+              },
+              declining: {
+                count: 0,
+                percentage: 0,
+                description: 'Keywords that moved to worse positions (higher rank numbers)'
+              },
+              stable: {
+                count: 0,
+                percentage: 0,
+                description: 'Keywords that maintained the same position'
+              }
+            }
+          };
+        }
+
+        let improved = 0;
+        let declined = 0;
+        let unchanged = 0;
+        const totalKeywords = analytics.keywords.length;
+
+        // Calculate movement for each keyword
+        for (const keyword of analytics.keywords) {
+          const monthlyData = keyword.monthlyComputed;
+          
+          if (monthlyData.length >= 2) {
+            const currentMonth = monthlyData[0]; // Most recent
+            const previousMonth = monthlyData[1]; // Previous month
+            
+            const currentRank = currentMonth.averageRank;
+            const previousRank = previousMonth.averageRank;
+            
+            // Lower rank number is better (rank 1 is better than rank 10)
+            if (currentRank < previousRank) {
+              improved++; // Position improved
+            } else if (currentRank > previousRank) {
+              declined++; // Position declined
+            } else {
+              unchanged++; // No change
+            }
+          } else {
+            unchanged++; // Not enough data to compare
+          }
+        }
+
+        const improvedPercentage = totalKeywords > 0 ? Math.round((improved / totalKeywords) * 100) : 0;
+        const declinedPercentage = totalKeywords > 0 ? Math.round((declined / totalKeywords) * 100) : 0;
+        const unchangedPercentage = totalKeywords > 0 ? Math.round((unchanged / totalKeywords) * 100) : 0;
+
+        return {
+          totalKeywords,
+          // Raw counts
+          improved,
+          declined,
+          unchanged,
+          // Percentages
+          improvedPercentage,
+          declinedPercentage,
+          unchangedPercentage,
+          // Summary stats
+          movementSummary: {
+            hasMovement: improved + declined,
+            hasMovementPercentage: totalKeywords > 0 ? Math.round(((improved + declined) / totalKeywords) * 100) : 0,
+            improvementRatio: declined > 0 ? Math.round((improved / declined) * 100) / 100 : improved > 0 ? Infinity : 0,
+          },
+          // Detailed breakdown
+          breakdown: {
+            improving: {
+              count: improved,
+              percentage: improvedPercentage,
+              description: 'Keywords that moved to better positions (lower rank numbers)'
+            },
+            declining: {
+              count: declined,
+              percentage: declinedPercentage,
+              description: 'Keywords that moved to worse positions (higher rank numbers)'
+            },
+            stable: {
+              count: unchanged,
+              percentage: unchangedPercentage,
+              description: 'Keywords that maintained the same position'
+            }
+          }
+        };
+      } catch (error) {
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to get keyword movement stats',
+        });
+      }
+    }),
+
+  // Get average rank across all keywords in the campaign
+  getAverageRank: protectedProcedure
+    .input(z.object({ campaignId: z.string() }))
+    .query(async ({ input, ctx }) => {
+      try {
+        const campaign = await prisma.campaign.findUnique({
+          where: { id: input.campaignId },
+        });
+
+        if (!campaign) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'Campaign not found',
+          });
+        }
+
+        // Check access permissions
+        if (ctx.user.role !== 'ADMIN' && campaign.userId !== ctx.user.id) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'You do not have permission to access this campaign',
+          });
+        }
+
+        // Get analytics data
+        const analytics = await prisma.searchConsoleKeywordAnalytics.findFirst({
+          where: { siteUrl: campaign.searchConsoleSite },
+          include: {
+            keywords: {
+              include: {
+                monthlyComputed: {
+                  orderBy: [{ year: 'desc' }, { month: 'desc' }],
+                  take: 1, // Get most recent month
+                },
+              },
+            },
+          },
+        });
+
+        if (!analytics || analytics.keywords.length === 0) {
+          return {
+            averageRank: 0,
+            totalKeywords: 0,
+            keywordsWithData: 0,
+          };
+        }
+
+        let totalRank = 0;
+        let keywordsWithData = 0;
+
+        // Calculate average rank from most recent month data
+        for (const keyword of analytics.keywords) {
+          const latestData = keyword.monthlyComputed[0];
+          if (latestData && latestData.averageRank > 0) {
+            totalRank += latestData.averageRank;
+            keywordsWithData++;
+          }
+        }
+
+        const averageRank = keywordsWithData > 0 ? Math.round((totalRank / keywordsWithData) * 100) / 100 : 0;
+
+        return {
+          averageRank,
+          totalKeywords: analytics.keywords.length,
+          keywordsWithData,
+        };
+      } catch (error) {
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to get average rank',
+        });
+      }
+    }),
+
+  // Get total organic visits (clicks) from last year to date
+  getTotalOrganicVisits: protectedProcedure
+    .input(z.object({ campaignId: z.string() }))
+    .query(async ({ input, ctx }) => {
+      try {
+        const campaign = await prisma.campaign.findUnique({
+          where: { id: input.campaignId },
+        });
+
+        if (!campaign) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'Campaign not found',
+          });
+        }
+
+        // Check access permissions
+        if (ctx.user.role !== 'ADMIN' && campaign.userId !== ctx.user.id) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'You do not have permission to access this campaign',
+          });
+        }
+
+        // Calculate date range: from January 1st of last year to today
+        const currentDate = new Date();
+        const lastYear = currentDate.getFullYear() - 1;
+        const startDate = new Date(lastYear, 0, 1); // January 1st of last year
+        const endDate = new Date(); // Today
+
+        // Get traffic analytics data
+        const trafficAnalytics = await prisma.searchConsoleTrafficAnalytics.findFirst({
+          where: { siteUrl: campaign.searchConsoleSite },
+          include: {
+            daily: {
+              where: {
+                date: {
+                  gte: startDate,
+                  lte: endDate,
+                },
+              },
+            },
+          },
+        });
+
+        if (!trafficAnalytics || trafficAnalytics.daily.length === 0) {
+          return {
+            totalClicks: 0,
+            startDate: startDate.toISOString(),
+            endDate: endDate.toISOString(),
+            daysWithData: 0,
+          };
+        }
+
+        // Sum all clicks from the daily data
+        const totalClicks = trafficAnalytics.daily.reduce((sum, day) => sum + day.clicks, 0);
+
+        return {
+          totalClicks,
+          startDate: startDate.toISOString(),
+          endDate: endDate.toISOString(),
+          daysWithData: trafficAnalytics.daily.length,
+        };
+      } catch (error) {
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to get total organic visits',
+        });
+      }
+    }),
+
+  // Get best-performing click month compared to the same month last year
+  getBestPerformingMonth: protectedProcedure
+    .input(z.object({ campaignId: z.string() }))
+    .query(async ({ input, ctx }) => {
+      try {
+        const campaign = await prisma.campaign.findUnique({
+          where: { id: input.campaignId },
+        });
+
+        if (!campaign) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'Campaign not found',
+          });
+        }
+
+        // Check access permissions
+        if (ctx.user.role !== 'ADMIN' && campaign.userId !== ctx.user.id) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'You do not have permission to access this campaign',
+          });
+        }
+
+        const currentYear = new Date().getFullYear();
+        const lastYear = currentYear - 1;
+
+        // Get monthly traffic data for current and last year
+        const trafficAnalytics = await prisma.searchConsoleTrafficAnalytics.findFirst({
+          where: { siteUrl: campaign.searchConsoleSite },
+          include: {
+            monthly: {
+              where: {
+                OR: [
+                  { year: currentYear },
+                  { year: lastYear },
+                ],
+              },
+              orderBy: [{ year: 'desc' }, { month: 'desc' }],
+            },
+          },
+        });
+
+        if (!trafficAnalytics || trafficAnalytics.monthly.length === 0) {
+          return {
+            bestMonth: null,
+            bestMonthClicks: 0,
+            comparisonClicks: 0,
+            improvementPercentage: 0,
+            year: currentYear,
+          };
+        }
+
+        // Group monthly data by year
+        const currentYearData = trafficAnalytics.monthly.filter(m => m.year === currentYear);
+        const lastYearData = trafficAnalytics.monthly.filter(m => m.year === lastYear);
+
+        let bestMonth = null;
+        let bestMonthClicks = 0;
+        let comparisonClicks = 0;
+        let maxImprovement = 0;
+
+        // Compare each month of current year with same month last year
+        for (const currentMonthData of currentYearData) {
+          const sameMonthLastYear = lastYearData.find(m => m.month === currentMonthData.month);
+          
+          if (sameMonthLastYear) {
+            const improvement = currentMonthData.clicks - sameMonthLastYear.clicks;
+            const improvementPercentage = sameMonthLastYear.clicks > 0 
+              ? (improvement / sameMonthLastYear.clicks) * 100 
+              : 0;
+
+            if (improvement > maxImprovement) {
+              maxImprovement = improvement;
+              bestMonth = currentMonthData.month;
+              bestMonthClicks = currentMonthData.clicks;
+              comparisonClicks = sameMonthLastYear.clicks;
+            }
+          }
+        }
+
+        const improvementPercentage = comparisonClicks > 0 
+          ? Math.round((maxImprovement / comparisonClicks) * 100) 
+          : 0;
+
+        return {
+          bestMonth,
+          bestMonthClicks,
+          comparisonClicks,
+          improvementPercentage,
+          year: currentYear,
+        };
+      } catch (error) {
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to get best performing month',
+        });
+      }
+    }),
+
+  // Get top keywords driving traffic to the website this month
+  getTopKeywordsThisMonth: protectedProcedure
+    .input(z.object({ 
+      campaignId: z.string(),
+      limit: z.number().min(1).max(50).default(10),
+    }))
+    .query(async ({ input, ctx }) => {
+      try {
+        const campaign = await prisma.campaign.findUnique({
+          where: { id: input.campaignId },
+        });
+
+        if (!campaign) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'Campaign not found',
+          });
+        }
+
+        // Check access permissions
+        if (ctx.user.role !== 'ADMIN' && campaign.userId !== ctx.user.id) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'You do not have permission to access this campaign',
+          });
+        }
+
+        const currentDate = new Date();
+        const currentMonth = currentDate.getMonth() + 1;
+        const currentYear = currentDate.getFullYear();
+
+        // Get analytics data for current month
+        const analytics = await prisma.searchConsoleKeywordAnalytics.findFirst({
+          where: { siteUrl: campaign.searchConsoleSite },
+          include: {
+            keywords: {
+              include: {
+                monthlyComputed: {
+                  where: {
+                    month: currentMonth,
+                    year: currentYear,
+                  },
+                },
+              },
+            },
+          },
+        });
+
+        if (!analytics || analytics.keywords.length === 0) {
+          return {
+            keywords: [],
+            month: currentMonth,
+            year: currentYear,
+            totalKeywords: 0,
+          };
+        }
+
+        // Filter keywords that have data for current month and sort by clicks
+        const keywordsWithData = analytics.keywords
+          .filter(keyword => keyword.monthlyComputed.length > 0)
+          .map(keyword => {
+            const monthData = keyword.monthlyComputed[0];
+            return {
+              keyword: keyword.keyword,
+              clicks: monthData.clicks,
+              impressions: monthData.impressions,
+              averageRank: monthData.averageRank,
+              ctr: monthData.impressions > 0 ? (monthData.clicks / monthData.impressions) * 100 : 0,
+              topRankingPageUrl: monthData.topRankingPageUrl,
+            };
+          })
+          .sort((a, b) => b.clicks - a.clicks) // Sort by clicks descending
+          .slice(0, input.limit);
+
+        return {
+          keywords: keywordsWithData,
+          month: currentMonth,
+          year: currentYear,
+          totalKeywords: keywordsWithData.length,
+        };
+      } catch (error) {
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to get top keywords this month',
+        });
+      }
+    }),
+
+  // Get comprehensive campaign analytics summary
+  getCampaignAnalyticsSummary: protectedProcedure
+    .input(z.object({ campaignId: z.string() }))
+    .query(async ({ input, ctx }) => {
+      try {
+        const campaign = await prisma.campaign.findUnique({
+          where: { id: input.campaignId },
+        });
+
+        if (!campaign) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'Campaign not found',
+          });
+        }
+
+        // Check access permissions
+        if (ctx.user.role !== 'ADMIN' && campaign.userId !== ctx.user.id) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'You do not have permission to access this campaign',
+          });
+        }
+
+        // Execute all analytics queries in parallel for better performance
+        const [
+          totalKeywords,
+          movementStats,
+          averageRank,
+          organicVisits,
+          bestMonth,
+          topKeywords,
+        ] = await Promise.allSettled([
+          // Total keywords count
+          (async () => {
+            const analytics = await prisma.searchConsoleKeywordAnalytics.findFirst({
+              where: { siteUrl: campaign.searchConsoleSite },
+              include: { keywords: true },
+            });
+            return analytics?.keywords.length || 0;
+          })(),
+
+          // Movement stats
+          (async () => {
+            const analytics = await prisma.searchConsoleKeywordAnalytics.findFirst({
+              where: { siteUrl: campaign.searchConsoleSite },
+              include: {
+                keywords: {
+                  include: {
+                    monthlyComputed: {
+                      orderBy: [{ year: 'desc' }, { month: 'desc' }],
+                      take: 2,
+                    },
+                  },
+                },
+              },
+            });
+
+            if (!analytics) return { improved: 0, declined: 0, unchanged: 0, improvedPercentage: 0, declinedPercentage: 0 };
+
+            let improved = 0, declined = 0, unchanged = 0;
+            const total = analytics.keywords.length;
+
+            for (const keyword of analytics.keywords) {
+              const monthlyData = keyword.monthlyComputed;
+              if (monthlyData.length >= 2) {
+                const current = monthlyData[0].averageRank;
+                const previous = monthlyData[1].averageRank;
+                if (current < previous) improved++;
+                else if (current > previous) declined++;
+                else unchanged++;
+              } else {
+                unchanged++;
+              }
+            }
+
+            return {
+              improved,
+              declined,
+              unchanged,
+              improvedPercentage: total > 0 ? Math.round((improved / total) * 100) : 0,
+              declinedPercentage: total > 0 ? Math.round((declined / total) * 100) : 0,
+            };
+          })(),
+
+          // Average rank
+          (async () => {
+            const analytics = await prisma.searchConsoleKeywordAnalytics.findFirst({
+              where: { siteUrl: campaign.searchConsoleSite },
+              include: {
+                keywords: {
+                  include: {
+                    monthlyComputed: {
+                      orderBy: [{ year: 'desc' }, { month: 'desc' }],
+                      take: 1,
+                    },
+                  },
+                },
+              },
+            });
+
+            if (!analytics) return 0;
+
+            let totalRank = 0, keywordsWithData = 0;
+            for (const keyword of analytics.keywords) {
+              const latestData = keyword.monthlyComputed[0];
+              if (latestData && latestData.averageRank > 0) {
+                totalRank += latestData.averageRank;
+                keywordsWithData++;
+              }
+            }
+
+            return keywordsWithData > 0 ? Math.round((totalRank / keywordsWithData) * 100) / 100 : 0;
+          })(),
+
+          // Organic visits year to date
+          (async () => {
+            const currentDate = new Date();
+            const startOfYear = new Date(currentDate.getFullYear(), 0, 1);
+            
+            const trafficAnalytics = await prisma.searchConsoleTrafficAnalytics.findFirst({
+              where: { siteUrl: campaign.searchConsoleSite },
+              include: {
+                daily: {
+                  where: {
+                    date: {
+                      gte: startOfYear,
+                      lte: currentDate,
+                    },
+                  },
+                },
+              },
+            });
+
+            return trafficAnalytics?.daily.reduce((sum, day) => sum + day.clicks, 0) || 0;
+          })(),
+
+          // Best performing month
+          (async () => {
+            const currentYear = new Date().getFullYear();
+            const lastYear = currentYear - 1;
+
+            const trafficAnalytics = await prisma.searchConsoleTrafficAnalytics.findFirst({
+              where: { siteUrl: campaign.searchConsoleSite },
+              include: {
+                monthly: {
+                  where: {
+                    OR: [{ year: currentYear }, { year: lastYear }],
+                  },
+                },
+              },
+            });
+
+            if (!trafficAnalytics) return null;
+
+            const currentYearData = trafficAnalytics.monthly.filter(m => m.year === currentYear);
+            const lastYearData = trafficAnalytics.monthly.filter(m => m.year === lastYear);
+
+            let bestMonth = null, maxImprovement = 0;
+            for (const current of currentYearData) {
+              const lastYear = lastYearData.find(m => m.month === current.month);
+              if (lastYear) {
+                const improvement = current.clicks - lastYear.clicks;
+                if (improvement > maxImprovement) {
+                  maxImprovement = improvement;
+                  bestMonth = current.month;
+                }
+              }
+            }
+
+            return bestMonth;
+          })(),
+
+          // Top 5 keywords this month
+          (async () => {
+            const currentMonth = new Date().getMonth() + 1;
+            const currentYear = new Date().getFullYear();
+
+            const analytics = await prisma.searchConsoleKeywordAnalytics.findFirst({
+              where: { siteUrl: campaign.searchConsoleSite },
+              include: {
+                keywords: {
+                  include: {
+                    monthlyComputed: {
+                      where: { month: currentMonth, year: currentYear },
+                    },
+                  },
+                },
+              },
+            });
+
+            if (!analytics) return [];
+
+            return analytics.keywords
+              .filter(k => k.monthlyComputed.length > 0)
+              .map(k => ({
+                keyword: k.keyword,
+                clicks: k.monthlyComputed[0].clicks,
+              }))
+              .sort((a, b) => b.clicks - a.clicks)
+              .slice(0, 5);
+          })(),
+        ]);
+
+        // Process results, handling any failures gracefully
+        const summary = {
+          totalKeywords: totalKeywords.status === 'fulfilled' ? totalKeywords.value : 0,
+          movementStats: movementStats.status === 'fulfilled' ? movementStats.value : {
+            improved: 0, declined: 0, unchanged: 0, improvedPercentage: 0, declinedPercentage: 0
+          },
+          averageRank: averageRank.status === 'fulfilled' ? averageRank.value : 0,
+          organicVisitsYTD: organicVisits.status === 'fulfilled' ? organicVisits.value : 0,
+          bestPerformingMonth: bestMonth.status === 'fulfilled' ? bestMonth.value : null,
+          topKeywordsThisMonth: topKeywords.status === 'fulfilled' ? topKeywords.value : [],
+          campaignId: input.campaignId,
+          campaignName: campaign.name,
+          generatedAt: new Date().toISOString(),
+        };
+
+        return summary;
+      } catch (error) {
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to get campaign analytics summary',
+        });
+      }
+    }),
 });

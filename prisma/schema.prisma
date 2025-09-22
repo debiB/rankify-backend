@@ -8,17 +8,183 @@ datasource db {
 }
 
 model User {
-  id                    String   @id @default(cuid())
-  email                 String   @unique
-  password              String
-  name                  String?
-  role                  Role     @default(USER)
-  status                Status   @default(ACTIVE)
-  hasChangedPassword    Boolean  @default(false)
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
-  campaigns             Campaign[]
-  favorites             UserKeywordFavorite[]
+  id                 String                @id @default(cuid())
+  email              String                @unique
+  password           String
+  name               String?
+  role               Role                  @default(USER)
+  status             Status                @default(ACTIVE)
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+  hasChangedPassword Boolean               @default(false)
+  campaigns          Campaign[]
+  favorites          UserKeywordFavorite[]
+}
+
+model GoogleAccount {
+  id           String     @id @default(cuid())
+  email        String     @unique
+  accountName  String
+  accessToken  String     @db.Text
+  refreshToken String     @db.Text
+  expiresAt    DateTime
+  isActive     Boolean    @default(true)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  campaigns    Campaign[]
+}
+
+model Campaign {
+  id                   String         @id @default(cuid())
+  name                 String
+  startingDate         DateTime
+  searchConsoleAccount String
+  searchConsoleSite    String
+  keywords             String         @db.Text
+  status               CampaignStatus @default(ACTIVE)
+  userId               String
+  googleAccountId      String
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+  googleAccount        GoogleAccount  @relation(fields: [googleAccountId], references: [id], onDelete: Cascade)
+  user                 User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([googleAccountId], map: "Campaign_googleAccountId_fkey")
+  @@index([userId], map: "Campaign_userId_fkey")
+}
+
+model SearchConsoleKeywordAnalytics {
+  id        String                 @id @default(cuid())
+  siteUrl   String
+  createdAt DateTime               @default(now())
+  updatedAt DateTime               @updatedAt
+  keywords  SearchConsoleKeyword[]
+
+  @@index([siteUrl])
+}
+
+model SearchConsoleKeyword {
+  id              String                                @id @default(cuid())
+  analyticsId     String
+  keyword         String
+  initialPosition Int
+  createdAt       DateTime                              @default(now())
+  updatedAt       DateTime                              @updatedAt
+  analytics       SearchConsoleKeywordAnalytics         @relation(fields: [analyticsId], references: [id], onDelete: Cascade)
+  dailyStats      SearchConsoleKeywordDailyStat[]
+  monthlyComputed SearchConsoleKeywordMonthlyComputed[]
+  monthlyStats    SearchConsoleKeywordMonthlyStat[]
+  favorites       UserKeywordFavorite[]
+
+  @@unique([analyticsId, keyword])
+  @@index([keyword])
+  @@index([analyticsId, keyword])
+}
+
+model SearchConsoleKeywordMonthlyStat {
+  id                String               @id @default(cuid())
+  keywordId         String
+  month             Int
+  year              Int
+  averageRank       Float
+  searchVolume      Int
+  topRankingPageUrl String               @db.Text
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  keyword           SearchConsoleKeyword @relation(fields: [keywordId], references: [id], onDelete: Cascade)
+
+  @@unique([keywordId, month, year])
+  @@index([month, year])
+}
+
+model SearchConsoleKeywordDailyStat {
+  id                String               @id @default(cuid())
+  keywordId         String
+  date              DateTime
+  averageRank       Float?
+  searchVolume      Int
+  topRankingPageUrl String               @db.Text
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  keyword           SearchConsoleKeyword @relation(fields: [keywordId], references: [id], onDelete: Cascade)
+
+  @@unique([keywordId, date])
+  @@index([date])
+}
+
+model SearchConsoleKeywordMonthlyComputed {
+  id                String               @id @default(cuid())
+  keywordId         String
+  month             Int
+  year              Int
+  averageRank       Float
+  impressions       Int
+  clicks            Int
+  topRankingPageUrl String               @db.Text
+  calcWindowDays    Int
+  computedAt        DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  keyword           SearchConsoleKeyword @relation(fields: [keywordId], references: [id], onDelete: Cascade)
+
+  @@unique([keywordId, month, year])
+  @@index([month, year])
+}
+
+model SearchConsoleTrafficAnalytics {
+  id        String                        @id @default(cuid())
+  siteUrl   String
+  createdAt DateTime                      @default(now())
+  updatedAt DateTime                      @updatedAt
+  daily     SearchConsoleTrafficDaily[]
+  monthly   SearchConsoleTrafficMonthly[]
+
+  @@index([siteUrl])
+}
+
+model SearchConsoleTrafficMonthly {
+  id          String                        @id @default(cuid())
+  analyticsId String
+  month       Int
+  year        Int
+  clicks      Int
+  impressions Int
+  createdAt   DateTime                      @default(now())
+  updatedAt   DateTime                      @updatedAt
+  ctr         Float
+  position    Float
+  analytics   SearchConsoleTrafficAnalytics @relation(fields: [analyticsId], references: [id], onDelete: Cascade)
+
+  @@unique([analyticsId, month, year])
+  @@index([month, year])
+}
+
+model SearchConsoleTrafficDaily {
+  id          String                        @id @default(cuid())
+  analyticsId String
+  date        DateTime
+  clicks      Int
+  impressions Int
+  createdAt   DateTime                      @default(now())
+  updatedAt   DateTime                      @updatedAt
+  ctr         Float
+  position    Float
+  analytics   SearchConsoleTrafficAnalytics @relation(fields: [analyticsId], references: [id], onDelete: Cascade)
+
+  @@unique([analyticsId, date])
+  @@index([date])
+}
+
+model UserKeywordFavorite {
+  id        String               @id @default(cuid())
+  userId    String
+  keywordId String
+  createdAt DateTime             @default(now())
+  keyword   SearchConsoleKeyword @relation(fields: [keywordId], references: [id], onDelete: Cascade)
+  user      User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, keywordId])
+  @@index([userId])
+  @@index([keywordId])
 }
 
 enum Role {
@@ -31,184 +197,21 @@ enum Status {
   INACTIVE
 }
 
-model GoogleAccount {
-  id          String   @id @default(cuid())
-  email       String   @unique
-  accountName String
-  accessToken String   @db.Text
-  refreshToken String  @db.Text
-  expiresAt   DateTime
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  campaigns   Campaign[]
-}
-
-model Campaign {
-  id                    String   @id @default(cuid())
-  name                  String
-  startingDate          DateTime
-  searchConsoleAccount  String
-  searchConsoleSite     String
-  keywords              String   @db.Text
-  status                CampaignStatus @default(ACTIVE)
-  userId                String
-  googleAccountId       String
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
-  
-  user                  User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  googleAccount         GoogleAccount @relation(fields: [googleAccountId], references: [id], onDelete: Cascade)
-}
-
 enum CampaignStatus {
   ACTIVE
   PAUSED
-} 
-
-// Keyword analytics models
-model SearchConsoleKeywordAnalytics {
-  id        String   @id @default(cuid())
-  siteUrl   String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  keywords  SearchConsoleKeyword[]
-
-  @@index([siteUrl])
 }
 
-model SearchConsoleKeyword {
-  id              String   @id @default(cuid())
-  analyticsId     String
-  keyword         String
-  initialPosition Int
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+// Admin notification preferences
+model AdminNotificationPreferences {
+  id                     String  @id @default(cuid())
+  enableEmail            Boolean @default(true)
+  enableWhatsApp         Boolean @default(true)
+  enableAllNotifications Boolean @default(true)
+  positionThresholds     String  @default("[1,2,3]") // JSON array of position thresholds
+  clicksThreshold        Int     @default(100)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
 
-  analytics   SearchConsoleKeywordAnalytics @relation(fields: [analyticsId], references: [id], onDelete: Cascade)
-  monthlyStats SearchConsoleKeywordMonthlyStat[]
-  dailyStats   SearchConsoleKeywordDailyStat[]
-  monthlyComputed SearchConsoleKeywordMonthlyComputed[]
-  favorites   UserKeywordFavorite[]
-
-  @@index([keyword])
-  @@index([analyticsId, keyword])
-  @@unique([analyticsId, keyword])
-}
-
-model SearchConsoleKeywordMonthlyStat {
-  id                 String   @id @default(cuid())
-  keywordId          String
-  month              Int
-  year               Int
-  averageRank        Float
-  searchVolume       Int
-  topRankingPageUrl  String   @db.Text
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
-
-  keyword SearchConsoleKeyword @relation(fields: [keywordId], references: [id], onDelete: Cascade)
-
-  @@unique([keywordId, month, year])
-  @@index([month, year])
-}
-
-model SearchConsoleKeywordDailyStat {
-  id                 String   @id @default(cuid())
-  keywordId          String
-  date               DateTime
-  averageRank        Float?
-  searchVolume       Int
-  topRankingPageUrl  String   @db.Text
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
-
-  keyword SearchConsoleKeyword @relation(fields: [keywordId], references: [id], onDelete: Cascade)
-
-  @@unique([keywordId, date])
-  @@index([date])
-}
-
-// Persisted per-month keyword metrics computed from raw GSC (for Rankings table)
-model SearchConsoleKeywordMonthlyComputed {
-  id                 String   @id @default(cuid())
-  keywordId          String
-  month              Int
-  year               Int
-  averageRank        Float   // impressions-weighted avg position for the month's top page
-  impressions        Int     // total impressions used in calc window
-  clicks             Int     // optional, total clicks in calc window
-  topRankingPageUrl  String  @db.Text
-  calcWindowDays     Int     // 7 for past months, N for current month
-  computedAt         DateTime @default(now())
-  updatedAt          DateTime @updatedAt
-
-  keyword SearchConsoleKeyword @relation(fields: [keywordId], references: [id], onDelete: Cascade)
-
-  @@unique([keywordId, month, year])
-  @@index([month, year])
-}
-
-// Traffic analytics models
-model SearchConsoleTrafficAnalytics {
-  id        String   @id @default(cuid())
-  siteUrl   String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  monthly SearchConsoleTrafficMonthly[]
-  daily   SearchConsoleTrafficDaily[]
-
-  @@index([siteUrl])
-}
-
-model SearchConsoleTrafficMonthly {
-  id          String   @id @default(cuid())
-  analyticsId String
-  month       Int
-  year        Int
-  clicks      Int
-  impressions Int
-  ctr         Float
-  position    Float
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  analytics SearchConsoleTrafficAnalytics @relation(fields: [analyticsId], references: [id], onDelete: Cascade)
-
-  @@unique([analyticsId, month, year])
-  @@index([month, year])
-}
-
-model SearchConsoleTrafficDaily {
-  id          String   @id @default(cuid())
-  analyticsId String
-  date        DateTime
-  clicks      Int
-  impressions Int
-  ctr         Float
-  position    Float
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  analytics SearchConsoleTrafficAnalytics @relation(fields: [analyticsId], references: [id], onDelete: Cascade)
-
-  @@unique([analyticsId, date])
-  @@index([date])
-}
-
-// User favorites for keywords
-model UserKeywordFavorite {
-  id         String @id @default(cuid())
-  userId     String
-  keywordId  String
-  createdAt  DateTime @default(now())
-
-  user    User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
-  keyword SearchConsoleKeyword @relation(fields: [keywordId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, keywordId])
-  @@index([userId])
-  @@index([keywordId])
+  @@map("admin_notification_preferences")
 }

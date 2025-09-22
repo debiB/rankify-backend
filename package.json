@@ -15,7 +15,7 @@
     "db:migrate:deploy": "prisma migrate deploy",
     "db:studio": "prisma studio",
     "deploy": "npm run build && npm run db:migrate:deploy && npm run db:generate",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test:analytics": "npx ts-node scripts/test-analytics-endpoints.ts"
   },
   "keywords": [],
   "author": "",
@@ -49,9 +49,11 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/morgan": "^1.9.10",
     "@types/node": "^24.2.0",
+    "@vitest/ui": "^2.1.9",
     "nodemon": "^3.1.10",
     "prisma": "^6.13.0",
     "ts-node": "^10.9.2",
-    "typescript": "^5.9.2"
+    "typescript": "^5.9.2",
+    "vitest": "^2.1.9"
   }
 }

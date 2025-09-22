@@ -6,6 +6,7 @@ import { CronService } from '../../services/cronService';
 import { AnalyticsService } from '../../services/analytics';
 import { comparePassword } from '../../utils/auth';
 import { sendTestEmail } from '../../utils/email';
+import { NotificationTemplateService } from '../../services/notificationTemplateService';
 
 export const adminRouter = router({
   // Delete all search console analytics data
@@ -46,57 +47,41 @@ export const adminRouter = router({
 
         console.log('Starting deletion of all search data...');
 
-        // Deletion order (documentation):
-        // 1) Computed monthly keyword metrics (depend on keywords)
-        // 2) Keyword monthly stats (depend on keywords)
-        // 3) Keywords (depend on keyword analytics)
-        // 4) Keyword analytics
-        // 5) Traffic daily (depend on traffic analytics)
-        // 6) Traffic monthly (depend on traffic analytics)
-        // 7) Traffic analytics
-        // This order avoids FK constraint violations and ensures a clean wipe.
-        // 1. Delete all computed monthly keyword data first (they reference keywords)
-        const deletedComputedMonthlyData =
-          await prisma.searchConsoleKeywordMonthlyComputed.deleteMany({});
-        console.log(
-          `Deleted ${deletedComputedMonthlyData.count} computed monthly keyword records`
-        );
-
-        // 2. Delete all keyword monthly stats (they reference keywords)
+        // 1. Delete all keyword monthly stats first (they reference keywords)
         const deletedKeywordMonthlyStats =
           await prisma.searchConsoleKeywordMonthlyStat.deleteMany({});
         console.log(
           `Deleted ${deletedKeywordMonthlyStats.count} keyword monthly stats`
         );
 
-        // 3. Delete all keywords (they reference analytics)
+        // 2. Delete all keywords (they reference analytics)
         const deletedKeywords = await prisma.searchConsoleKeyword.deleteMany(
           {}
         );
         console.log(`Deleted ${deletedKeywords.count} keywords`);
 
-        // 4. Delete all keyword analytics records
+        // 3. Delete all keyword analytics records
         const deletedKeywordAnalytics =
           await prisma.searchConsoleKeywordAnalytics.deleteMany({});
         console.log(
           `Deleted ${deletedKeywordAnalytics.count} keyword analytics records`
         );
 
-        // 5. Delete all traffic daily data first (they reference traffic analytics)
+        // 4. Delete all traffic daily data first (they reference traffic analytics)
         const deletedTrafficDaily =
           await prisma.searchConsoleTrafficDaily.deleteMany({});
         console.log(
           `Deleted ${deletedTrafficDaily.count} traffic daily records`
         );
 
-        // 6. Delete all traffic monthly data (they reference traffic analytics)
+        // 5. Delete all traffic monthly data (they reference traffic analytics)
         const deletedTrafficMonthly =
           await prisma.searchConsoleTrafficMonthly.deleteMany({});
         console.log(
           `Deleted ${deletedTrafficMonthly.count} traffic monthly records`
         );
 
-        // 7. Delete all traffic analytics records
+        // 6. Delete all traffic analytics records
         const deletedTrafficAnalytics =
           await prisma.searchConsoleTrafficAnalytics.deleteMany({});
         console.log(
@@ -104,7 +89,6 @@ export const adminRouter = router({
         );
 
         const totalDeleted =
-          deletedComputedMonthlyData.count +
           deletedKeywordMonthlyStats.count +
           deletedKeywords.count +
           deletedKeywordAnalytics.count +
@@ -117,7 +101,6 @@ export const adminRouter = router({
         return {
           success: true,
           deletedRecords: {
-            computedMonthlyData: deletedComputedMonthlyData.count,
             keywordMonthlyStats: deletedKeywordMonthlyStats.count,
             keywords: deletedKeywords.count,
             keywordAnalytics: deletedKeywordAnalytics.count,
@@ -444,6 +427,186 @@ export const adminRouter = router({
             error instanceof Error
               ? error.message
               : 'Failed to send test email',
+        });
+      }
+    }),
+
+  // Get admin notification preferences
+  getNotificationPreferences: adminProcedure
+    .input(z.object({ userId: z.string() }))
+    .query(async ({ input }) => {
+      try {
+        const { userId } = input;
+
+        // Verify user is admin
+        const user = await prisma.user.findUnique({
+          where: { id: userId },
+        });
+
+        if (!user || user.role !== 'ADMIN') {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Access denied. Admin role required.',
+          });
+        }
+
+        let preferences = await prisma.adminNotificationPreferences.findFirst();
+
+        // Create default preferences if none exist
+        if (!preferences) {
+          preferences = await prisma.adminNotificationPreferences.create({
+            data: {
+              enableEmail: true,
+              enableWhatsApp: true,
+              enableAllNotifications: true,
+              positionThresholds: JSON.stringify([1, 2, 3]),
+              clicksThreshold: 100,
+            },
+          });
+        }
+
+        // Parse JSON thresholds
+        const response = {
+          ...preferences,
+          positionThresholds: preferences.positionThresholds 
+            ? JSON.parse(preferences.positionThresholds) 
+            : [1, 2, 3],
+          clicksThreshold: preferences.clicksThreshold,
+        };
+
+        return {
+          success: true,
+          data: response,
+        };
+      } catch (error) {
+        if (error instanceof TRPCError) {
+          throw error;
+        }
+        console.error('Error fetching admin preferences:', error);
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to fetch admin preferences',
+        });
+      }
+    }),
+
+  // Update admin notification preferences
+  updateNotificationPreferences: adminProcedure
+    .input(
+      z.object({
+        userId: z.string(),
+        enableEmail: z.boolean().optional(),
+        enableWhatsApp: z.boolean().optional(),
+        enableAllNotifications: z.boolean().optional(),
+        positionThresholds: z.array(z.number()).optional(),
+        clickThresholds: z.array(z.number()).optional(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      try {
+        const {
+          userId,
+          enableEmail,
+          enableWhatsApp,
+          enableAllNotifications,
+          positionThresholds,
+          clickThresholds,
+        } = input;
+
+        // Verify user is admin
+        const user = await prisma.user.findUnique({
+          where: { id: userId },
+        });
+
+        if (!user || user.role !== 'ADMIN') {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Access denied. Admin role required.',
+          });
+        }
+
+        // Get the first (and only) admin preferences record, or create it
+        let preferences = await prisma.adminNotificationPreferences.findFirst();
+        
+        if (preferences) {
+          preferences = await prisma.adminNotificationPreferences.update({
+            where: { id: preferences.id },
+            data: {
+              enableEmail: enableEmail ?? true,
+              enableWhatsApp: enableWhatsApp ?? true,
+              enableAllNotifications: enableAllNotifications ?? true,
+              positionThresholds: positionThresholds ? JSON.stringify(positionThresholds) : undefined,
+              clicksThreshold: clickThresholds ? clickThresholds[0] || 100 : undefined,
+            },
+          });
+        } else {
+          preferences = await prisma.adminNotificationPreferences.create({
+            data: {
+              enableEmail: enableEmail ?? true,
+              enableWhatsApp: enableWhatsApp ?? true,
+              enableAllNotifications: enableAllNotifications ?? true,
+              positionThresholds: JSON.stringify(positionThresholds || [1, 2, 3]),
+              clicksThreshold: clickThresholds ? clickThresholds[0] || 100 : 100,
+            },
+          });
+        }
+
+        // Parse JSON thresholds for response
+        const response = {
+          ...preferences,
+          positionThresholds: preferences.positionThresholds 
+            ? JSON.parse(preferences.positionThresholds) 
+            : [1, 2, 3],
+          clicksThreshold: preferences.clicksThreshold,
+        };
+
+        return {
+          success: true,
+          data: response,
+        };
+      } catch (error) {
+        if (error instanceof TRPCError) {
+          throw error;
+        }
+        console.error('Error updating admin preferences:', error);
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to update admin preferences',
+        });
+      }
+    }),
+
+  // Get notification template preview
+  getNotificationTemplatePreview: adminProcedure
+    .input(
+      z.object({
+        campaignName: z.string().optional(),
+        milestoneType: z.string().optional(),
+        value: z.union([z.number(), z.string()]).optional(),
+        keyword: z.string().optional(),
+      })
+    )
+    .query(async ({ input }) => {
+      try {
+        const template = input.campaignName || input.milestoneType || input.value || input.keyword
+          ? NotificationTemplateService.generateMilestoneTemplate(
+              input.campaignName,
+              input.milestoneType,
+              input.value,
+              input.keyword,
+              new Date()
+            )
+          : NotificationTemplateService.generateSampleTemplate();
+
+        return {
+          success: true,
+          data: template,
+        };
+      } catch (error) {
+        console.error('Error generating notification template preview:', error);
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to generate notification template preview',
         });
       }
     }),
