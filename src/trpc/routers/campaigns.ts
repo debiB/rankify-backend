@@ -3417,6 +3417,7 @@ export const campaignsRouter = router({
         });
 
         if (!trafficAnalytics || trafficAnalytics.monthly.length === 0) {
+          console.log(`No traffic analytics found for campaign ${input.campaignId}, site: ${campaign.searchConsoleSite}`);
           return {
             bestMonth: null,
             bestMonthClicks: 0,
@@ -3426,37 +3427,47 @@ export const campaignsRouter = router({
           };
         }
 
+        console.log(`Found ${trafficAnalytics.monthly.length} monthly records for campaign ${input.campaignId}`);
+
         // Group monthly data by year
         const currentYearData = trafficAnalytics.monthly.filter(m => m.year === currentYear);
         const lastYearData = trafficAnalytics.monthly.filter(m => m.year === lastYear);
 
+        console.log(`Current year (${currentYear}) data: ${currentYearData.length} records`);
+        console.log(`Last year (${lastYear}) data: ${lastYearData.length} records`);
+
         let bestMonth = null;
         let bestMonthClicks = 0;
         let comparisonClicks = 0;
-        let maxImprovement = 0;
+        let maxClicks = 0;
 
-        // Compare each month of current year with same month last year
-        for (const currentMonthData of currentYearData) {
-          const sameMonthLastYear = lastYearData.find(m => m.month === currentMonthData.month);
-          
-          if (sameMonthLastYear) {
-            const improvement = currentMonthData.clicks - sameMonthLastYear.clicks;
-            const improvementPercentage = sameMonthLastYear.clicks > 0 
-              ? (improvement / sameMonthLastYear.clicks) * 100 
-              : 0;
+        // If no current year data, use last year data as fallback
+        const dataToAnalyze = currentYearData.length > 0 ? currentYearData : lastYearData;
+        const comparisonYear = currentYearData.length > 0 ? lastYear : lastYear - 1;
+        const comparisonData = currentYearData.length > 0 ? lastYearData : 
+          trafficAnalytics.monthly.filter(m => m.year === comparisonYear);
 
-            if (improvement > maxImprovement) {
-              maxImprovement = improvement;
-              bestMonth = currentMonthData.month;
-              bestMonthClicks = currentMonthData.clicks;
-              comparisonClicks = sameMonthLastYear.clicks;
-            }
+        console.log(`Analyzing ${dataToAnalyze.length} records from year ${currentYearData.length > 0 ? currentYear : lastYear}`);
+
+        // Find the month with the highest clicks
+        for (const monthData of dataToAnalyze) {
+          if (monthData.clicks > maxClicks) {
+            maxClicks = monthData.clicks;
+            bestMonth = monthData.month;
+            bestMonthClicks = monthData.clicks;
+            
+            // Find the same month in comparison year
+            const sameMonthComparison = comparisonData.find(m => m.month === monthData.month);
+            comparisonClicks = sameMonthComparison ? sameMonthComparison.clicks : 0;
           }
         }
 
+        console.log(`Best month: ${bestMonth}, clicks: ${bestMonthClicks}, comparison: ${comparisonClicks}`);
+
+        // Calculate improvement percentage for the best performing month
         const improvementPercentage = comparisonClicks > 0 
-          ? Math.round((maxImprovement / comparisonClicks) * 100) 
-          : 0;
+          ? Math.round(((bestMonthClicks - comparisonClicks) / comparisonClicks) * 100) 
+          : bestMonthClicks > 0 ? 100 : 0;
 
         return {
           bestMonth,
@@ -3505,7 +3516,11 @@ export const campaignsRouter = router({
         const currentMonth = currentDate.getMonth() + 1;
         const currentYear = currentDate.getFullYear();
 
-        // Get analytics data for current month
+        // Get previous month for comparison
+        const prevMonth = currentMonth === 1 ? 12 : currentMonth - 1;
+        const prevYear = currentMonth === 1 ? currentYear - 1 : currentYear;
+
+        // Get analytics data for current and previous month
         const analytics = await prisma.searchConsoleKeywordAnalytics.findFirst({
           where: { siteUrl: campaign.searchConsoleSite },
           include: {
@@ -3513,8 +3528,10 @@ export const campaignsRouter = router({
               include: {
                 monthlyComputed: {
                   where: {
-                    month: currentMonth,
-                    year: currentYear,
+                    OR: [
+                      { month: currentMonth, year: currentYear },
+                      { month: prevMonth, year: prevYear },
+                    ],
                   },
                 },
               },
@@ -3533,16 +3550,42 @@ export const campaignsRouter = router({
 
         // Filter keywords that have data for current month and sort by clicks
         const keywordsWithData = analytics.keywords
-          .filter(keyword => keyword.monthlyComputed.length > 0)
+          .filter(keyword => {
+            // Must have current month data
+            return keyword.monthlyComputed.some(
+              computed => computed.month === currentMonth && computed.year === currentYear
+            );
+          })
           .map(keyword => {
-            const monthData = keyword.monthlyComputed[0];
+            const currentMonthData = keyword.monthlyComputed.find(
+              computed => computed.month === currentMonth && computed.year === currentYear
+            );
+            const prevMonthData = keyword.monthlyComputed.find(
+              computed => computed.month === prevMonth && computed.year === prevYear
+            );
+
+            // Calculate rank change
+            let rankChange = 0;
+            let rankChangeDirection: 'up' | 'down' | 'same' = 'same';
+            
+            if (currentMonthData && prevMonthData) {
+              rankChange = prevMonthData.averageRank - currentMonthData.averageRank; // Positive = improvement (lower rank number)
+              if (rankChange > 0) {
+                rankChangeDirection = 'up';
+              } else if (rankChange < 0) {
+                rankChangeDirection = 'down';
+              }
+            }
+
             return {
               keyword: keyword.keyword,
-              clicks: monthData.clicks,
-              impressions: monthData.impressions,
-              averageRank: monthData.averageRank,
-              ctr: monthData.impressions > 0 ? (monthData.clicks / monthData.impressions) * 100 : 0,
-              topRankingPageUrl: monthData.topRankingPageUrl,
+              clicks: currentMonthData!.clicks,
+              impressions: currentMonthData!.impressions,
+              averageRank: currentMonthData!.averageRank,
+              ctr: currentMonthData!.impressions > 0 ? (currentMonthData!.clicks / currentMonthData!.impressions) * 100 : 0,
+              topRankingPageUrl: currentMonthData!.topRankingPageUrl,
+              rankChange: Math.abs(rankChange),
+              rankChangeDirection,
             };
           })
           .sort((a, b) => b.clicks - a.clicks) // Sort by clicks descending
@@ -3788,6 +3831,138 @@ export const campaignsRouter = router({
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: 'Failed to get campaign analytics summary',
+        });
+      }
+    }),
+
+  // Get current month organic traffic data grouped by periods for histogram
+  getCurrentMonthTrafficData: protectedProcedure
+    .input(
+      z.object({
+        campaignId: z.string().min(1, 'Campaign ID is required'),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      try {
+        // Get the campaign
+        const campaign = await prisma.campaign.findUnique({
+          where: { id: input.campaignId },
+        });
+
+        if (!campaign) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'Campaign not found',
+          });
+        }
+
+        // Check if user has access to this campaign
+        if (campaign.userId !== ctx.user.id && ctx.user.role !== 'ADMIN') {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'You do not have access to this campaign',
+          });
+        }
+
+        // Get traffic analytics for the site
+        const trafficAnalytics = await prisma.searchConsoleTrafficAnalytics.findFirst({
+          where: { siteUrl: campaign.searchConsoleSite },
+          include: {
+            daily: {
+              orderBy: { date: 'asc' },
+            },
+            monthly: {
+              orderBy: [{ year: 'asc' }, { month: 'asc' }],
+            },
+          },
+        });
+
+        if (!trafficAnalytics) {
+          return {
+            periods: [],
+            currentMonthTotal: 0,
+            previousMonthTotal: 0,
+            percentageChange: 0,
+          };
+        }
+
+        // Get current month data
+        const currentDate = new Date();
+        const currentMonth = currentDate.getMonth();
+        const currentYear = currentDate.getFullYear();
+
+        // Get daily records for current month
+        const currentMonthDailyRecords = trafficAnalytics.daily.filter((day) => {
+          const date = new Date(day.date);
+          return (
+            date.getMonth() === currentMonth &&
+            date.getFullYear() === currentYear
+          );
+        });
+
+        // Group data by 4-day periods
+        const periods = [];
+        const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+
+        for (let day = 1; day <= daysInMonth; day += 4) {
+          const endDay = Math.min(day + 3, daysInMonth);
+          const periodLabel = day === endDay ? `${day}` : `${day}-${endDay}`;
+
+          // Get clicks for this period
+          const periodClicks = currentMonthDailyRecords
+            .filter((record) => {
+              const recordDate = new Date(record.date);
+              const dayOfMonth = recordDate.getDate();
+              return dayOfMonth >= day && dayOfMonth <= endDay;
+            })
+            .reduce((sum, record) => sum + record.clicks, 0);
+
+          // Only include periods with clicks > 0
+          if (periodClicks > 0) {
+            periods.push({
+              period: periodLabel,
+              clicks: periodClicks,
+            });
+          }
+        }
+
+        // Calculate current month total
+        const currentMonthTotal = currentMonthDailyRecords.reduce(
+          (sum, day) => sum + day.clicks,
+          0
+        );
+
+        // Get previous month total for comparison
+        const prevMonth = currentMonth === 0 ? 11 : currentMonth - 1;
+        const prevYear = currentMonth === 0 ? currentYear - 1 : currentYear;
+
+        const previousMonthData = trafficAnalytics.monthly.find((month) => {
+          return month.month === prevMonth + 1 && month.year === prevYear;
+        });
+
+        const previousMonthTotal = previousMonthData?.clicks || 0;
+
+        // Calculate percentage change
+        const percentageChange = previousMonthTotal > 0 
+          ? ((currentMonthTotal - previousMonthTotal) / previousMonthTotal) * 100
+          : 0;
+
+        return {
+          periods,
+          currentMonthTotal,
+          previousMonthTotal,
+          percentageChange: parseFloat(percentageChange.toFixed(1)),
+        };
+      } catch (error) {
+        console.error('Error in getCurrentMonthTrafficData:', error);
+        if (error instanceof TRPCError) {
+          throw error;
+        }
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to fetch current month traffic data: ${
+            error instanceof Error ? error.message : 'Unknown error'
+          }`,
         });
       }
     }),
