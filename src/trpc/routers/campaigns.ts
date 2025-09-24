@@ -3966,4 +3966,188 @@ export const campaignsRouter = router({
         });
       }
     }),
+
+  // Get active campaigns count
+  getActiveCampaignsCount: adminProcedure.query(async () => {
+    try {
+      const count = await prisma.campaign.count({
+        where: { status: 'ACTIVE' },
+      });
+      return { count };
+    } catch (error) {
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to fetch active campaigns count',
+      });
+    }
+  }),
+
+  // Get overall visibility percentage across all campaigns
+  getOverallVisibility: adminProcedure.query(async () => {
+    try {
+      // Get all active campaigns
+      const campaigns = await prisma.campaign.findMany({
+        where: { status: 'ACTIVE' },
+      });
+
+      if (campaigns.length === 0) {
+        return { visibility: 0, totalKeywords: 0 };
+      }
+
+      let totalWeightedPositions = 0;
+      let totalKeywords = 0;
+
+      // Process each campaign
+      for (const campaign of campaigns) {
+        const analytics = await prisma.searchConsoleKeywordAnalytics.findFirst({
+          where: { siteUrl: campaign.searchConsoleSite },
+          include: {
+            keywords: {
+              include: {
+                monthlyComputed: {
+                  orderBy: { year: 'desc', month: 'desc' },
+                  take: 1, // Get most recent month
+                },
+              },
+            },
+          },
+        });
+
+        if (!analytics) continue;
+
+        // Process keywords for this campaign
+        for (const keyword of analytics.keywords) {
+          const latestData = keyword.monthlyComputed[0];
+          if (!latestData || !latestData.averageRank) continue;
+
+          const rank = latestData.averageRank;
+          let weight = 0;
+
+          // Apply ranking tier weights
+          if (rank >= 1 && rank <= 3) weight = 1.0;
+          else if (rank >= 4 && rank <= 10) weight = 0.7;
+          else if (rank >= 11 && rank <= 20) weight = 0.5;
+          else if (rank >= 21 && rank <= 50) weight = 0.2;
+          else if (rank >= 51) weight = 0.1;
+
+          totalWeightedPositions += weight;
+          totalKeywords++;
+        }
+      }
+
+      const visibility = totalKeywords > 0 ? (totalWeightedPositions / totalKeywords) * 100 : 0;
+
+      return {
+        visibility: parseFloat(visibility.toFixed(2)),
+        totalKeywords,
+      };
+    } catch (error) {
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to calculate overall visibility',
+      });
+    }
+  }),
+
+  // Get total keywords tracked across all campaigns
+  getKeywordsTrackedCount: adminProcedure.query(async () => {
+    try {
+      // Get all active campaigns
+      const campaigns = await prisma.campaign.findMany({
+        where: { status: 'ACTIVE' },
+      });
+
+      let totalKeywords = 0;
+
+      for (const campaign of campaigns) {
+        const analytics = await prisma.searchConsoleKeywordAnalytics.findFirst({
+          where: { siteUrl: campaign.searchConsoleSite },
+          include: {
+            keywords: true,
+          },
+        });
+
+        if (analytics) {
+          totalKeywords += analytics.keywords.length;
+        }
+      }
+
+      return { count: totalKeywords };
+    } catch (error) {
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to fetch keywords tracked count',
+      });
+    }
+  }),
+
+  // Get top performing campaign score
+  getTopPerformingCampaign: adminProcedure.query(async () => {
+    try {
+      const campaigns = await prisma.campaign.findMany({
+        where: { status: 'ACTIVE' },
+      });
+
+      if (campaigns.length === 0) {
+        return { score: 0 };
+      }
+
+      let bestScore = 0;
+
+      // Calculate performance score for each campaign
+      for (const campaign of campaigns) {
+        const analytics = await prisma.searchConsoleKeywordAnalytics.findFirst({
+          where: { siteUrl: campaign.searchConsoleSite },
+          include: {
+            keywords: {
+              include: {
+                monthlyComputed: {
+                  orderBy: { year: 'desc', month: 'desc' },
+                  take: 2, // Get last 2 months for comparison
+                },
+              },
+            },
+          },
+        });
+
+        if (!analytics || analytics.keywords.length === 0) continue;
+
+        let totalImprovement = 0;
+        let keywordsWithData = 0;
+
+        // Calculate average rank improvement for this campaign
+        for (const keyword of analytics.keywords) {
+          const monthlyData = keyword.monthlyComputed;
+          if (monthlyData.length >= 2) {
+            const currentMonth = monthlyData[0];
+            const previousMonth = monthlyData[1];
+
+            if (currentMonth.averageRank && previousMonth.averageRank) {
+              // Improvement = previous rank - current rank (positive = better)
+              const improvement = previousMonth.averageRank - currentMonth.averageRank;
+              totalImprovement += improvement;
+              keywordsWithData++;
+            }
+          }
+        }
+
+        if (keywordsWithData > 0) {
+          // Performance Score = Average improvement / Number of keywords
+          const averageImprovement = totalImprovement / keywordsWithData;
+          const performanceScore = averageImprovement / analytics.keywords.length;
+          
+          if (performanceScore > bestScore) {
+            bestScore = performanceScore;
+          }
+        }
+      }
+
+      return { score: parseFloat(bestScore.toFixed(3)) };
+    } catch (error) {
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to calculate top performing campaign score',
+      });
+    }
+  }),
 });

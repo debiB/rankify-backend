@@ -7,6 +7,27 @@ import { sendTemporaryPassword } from '../../utils/email';
 const prisma = new PrismaClient();
 
 export const usersRouter = router({
+  // Get user statistics for admin dashboard
+  getUserStats: adminProcedure.query(async () => {
+    try {
+      const [totalUsers, activeUsers, inactiveUsers, adminUsers] = await Promise.all([
+        prisma.user.count(),
+        prisma.user.count({ where: { status: 'ACTIVE' } }),
+        prisma.user.count({ where: { status: 'INACTIVE' } }),
+        prisma.user.count({ where: { role: 'ADMIN' } }),
+      ]);
+
+      return {
+        totalUsers,
+        activeUsers,
+        inactiveUsers,
+        adminUsers,
+      };
+    } catch (error) {
+      throw new Error('Failed to fetch user statistics');
+    }
+  }),
+
   getUsers: adminProcedure
     .input(
       z.object({
