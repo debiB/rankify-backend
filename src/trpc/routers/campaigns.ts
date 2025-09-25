@@ -3994,57 +3994,61 @@ export const campaignsRouter = router({
         return { visibility: 0, totalKeywords: 0 };
       }
 
-      let totalWeightedPositions = 0;
+      let totalVisibleKeywords = 0;
       let totalKeywords = 0;
 
       // Process each campaign
       for (const campaign of campaigns) {
-        const analytics = await prisma.searchConsoleKeywordAnalytics.findFirst({
-          where: { siteUrl: campaign.searchConsoleSite },
-          include: {
-            keywords: {
-              include: {
-                monthlyComputed: {
-                  orderBy: { year: 'desc', month: 'desc' },
-                  take: 1, // Get most recent month
+        try {
+          const analytics = await prisma.searchConsoleKeywordAnalytics.findFirst({
+            where: { siteUrl: campaign.searchConsoleSite },
+            include: {
+              keywords: {
+                include: {
+                  monthlyComputed: {
+                    orderBy: { year: 'desc', month: 'desc' },
+                    take: 1, // Get most recent month
+                  },
                 },
               },
             },
-          },
-        });
+          });
 
-        if (!analytics) continue;
+          if (!analytics || !analytics.keywords) continue;
 
-        // Process keywords for this campaign
-        for (const keyword of analytics.keywords) {
-          const latestData = keyword.monthlyComputed[0];
-          if (!latestData || !latestData.averageRank) continue;
+          // Process keywords for this campaign
+          for (const keyword of analytics.keywords) {
+            if (!keyword.monthlyComputed || keyword.monthlyComputed.length === 0) continue;
+            
+            const latestData = keyword.monthlyComputed[0];
+            if (!latestData || !latestData.averageRank || latestData.averageRank <= 0) continue;
 
-          const rank = latestData.averageRank;
-          let weight = 0;
+            const rank = latestData.averageRank;
+            totalKeywords++;
 
-          // Apply ranking tier weights
-          if (rank >= 1 && rank <= 3) weight = 1.0;
-          else if (rank >= 4 && rank <= 10) weight = 0.7;
-          else if (rank >= 11 && rank <= 20) weight = 0.5;
-          else if (rank >= 21 && rank <= 50) weight = 0.2;
-          else if (rank >= 51) weight = 0.1;
-
-          totalWeightedPositions += weight;
-          totalKeywords++;
+            // Simple visibility: count keywords ranking in top 20 as "visible"
+            if (rank >= 1 && rank <= 20) {
+              totalVisibleKeywords++;
+            }
+          }
+        } catch (campaignError) {
+          console.error(`Error processing campaign ${campaign.id}:`, campaignError);
+          continue; // Skip this campaign and continue with others
         }
       }
 
-      const visibility = totalKeywords > 0 ? (totalWeightedPositions / totalKeywords) * 100 : 0;
+      // Visibility = (Keywords in top 20 / Total keywords) * 100
+      const visibility = totalKeywords > 0 ? (totalVisibleKeywords / totalKeywords) * 100 : 0;
 
       return {
         visibility: parseFloat(visibility.toFixed(2)),
         totalKeywords,
       };
     } catch (error) {
+      console.error('Error in getOverallVisibility:', error);
       throw new TRPCError({
         code: 'INTERNAL_SERVER_ERROR',
-        message: 'Failed to calculate overall visibility',
+        message: `Failed to calculate overall visibility: ${error instanceof Error ? error.message : 'Unknown error'}`,
       });
     }
   }),
@@ -4096,57 +4100,67 @@ export const campaignsRouter = router({
 
       // Calculate performance score for each campaign
       for (const campaign of campaigns) {
-        const analytics = await prisma.searchConsoleKeywordAnalytics.findFirst({
-          where: { siteUrl: campaign.searchConsoleSite },
-          include: {
-            keywords: {
-              include: {
-                monthlyComputed: {
-                  orderBy: { year: 'desc', month: 'desc' },
-                  take: 2, // Get last 2 months for comparison
+        try {
+          const analytics = await prisma.searchConsoleKeywordAnalytics.findFirst({
+            where: { siteUrl: campaign.searchConsoleSite },
+            include: {
+              keywords: {
+                include: {
+                  monthlyComputed: {
+                    orderBy: { year: 'desc', month: 'desc' },
+                    take: 2, // Get last 2 months for comparison
+                  },
                 },
               },
             },
-          },
-        });
+          });
 
-        if (!analytics || analytics.keywords.length === 0) continue;
+          if (!analytics || !analytics.keywords || analytics.keywords.length === 0) continue;
 
-        let totalImprovement = 0;
-        let keywordsWithData = 0;
+          let improvedKeywords = 0;
+          let totalKeywords = 0;
 
-        // Calculate average rank improvement for this campaign
-        for (const keyword of analytics.keywords) {
-          const monthlyData = keyword.monthlyComputed;
-          if (monthlyData.length >= 2) {
+          // Simple performance calculation: percentage of keywords that improved
+          for (const keyword of analytics.keywords) {
+            if (!keyword.monthlyComputed || keyword.monthlyComputed.length < 2) continue;
+            
+            const monthlyData = keyword.monthlyComputed;
             const currentMonth = monthlyData[0];
             const previousMonth = monthlyData[1];
 
-            if (currentMonth.averageRank && previousMonth.averageRank) {
-              // Improvement = previous rank - current rank (positive = better)
-              const improvement = previousMonth.averageRank - currentMonth.averageRank;
-              totalImprovement += improvement;
-              keywordsWithData++;
+            if (currentMonth?.averageRank && previousMonth?.averageRank && 
+                currentMonth.averageRank > 0 && previousMonth.averageRank > 0) {
+              totalKeywords++;
+              
+              const rankChange = previousMonth.averageRank - currentMonth.averageRank;
+              
+              if (rankChange > 0) {
+                // Keyword improved (lower rank number = better)
+                improvedKeywords++;
+              }
             }
           }
-        }
 
-        if (keywordsWithData > 0) {
-          // Performance Score = Average improvement / Number of keywords
-          const averageImprovement = totalImprovement / keywordsWithData;
-          const performanceScore = averageImprovement / analytics.keywords.length;
-          
-          if (performanceScore > bestScore) {
-            bestScore = performanceScore;
+          if (totalKeywords > 0) {
+            // Simple Performance Score = (Improved Keywords / Total Keywords) * 100
+            const performanceScore = (improvedKeywords / totalKeywords) * 100;
+            
+            if (performanceScore > bestScore) {
+              bestScore = performanceScore;
+            }
           }
+        } catch (campaignError) {
+          console.error(`Error processing campaign ${campaign.id} for performance:`, campaignError);
+          continue; // Skip this campaign and continue with others
         }
       }
 
-      return { score: parseFloat(bestScore.toFixed(3)) };
+      return { score: parseFloat(bestScore.toFixed(1)) };
     } catch (error) {
+      console.error('Error in getTopPerformingCampaign:', error);
       throw new TRPCError({
         code: 'INTERNAL_SERVER_ERROR',
-        message: 'Failed to calculate top performing campaign score',
+        message: `Failed to calculate top performing campaign score: ${error instanceof Error ? error.message : 'Unknown error'}`,
       });
     }
   }),

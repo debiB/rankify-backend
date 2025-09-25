@@ -12,6 +12,10 @@ model User {
   email              String                @unique
   password           String
   name               String?
+  firstName          String?
+  lastName           String?
+  phoneNumber        String?
+  countryCode        String?               @default("+972")
   role               Role                  @default(USER)
   status             Status                @default(ACTIVE)
   createdAt          DateTime              @default(now())
@@ -19,6 +23,7 @@ model User {
   hasChangedPassword Boolean               @default(false)
   campaigns          Campaign[]
   favorites          UserKeywordFavorite[]
+  settings           UserSettings?
 }
 
 model GoogleAccount {
@@ -214,4 +219,21 @@ model AdminNotificationPreferences {
   updatedAt              DateTime @updatedAt
 
   @@map("admin_notification_preferences")
+}
+
+// User settings preferences
+model UserSettings {
+  id                    String   @id @default(cuid())
+  userId                String   @unique
+  enableNotifications   Boolean  @default(true)
+  notificationSound     Boolean  @default(true)
+  doNotDisturbMode      Boolean  @default(false)
+  emailNotifications    Boolean  @default(true)
+  systemLanguage        String   @default("en")
+  systemTheme           String   @default("dark")
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_settings")
 }

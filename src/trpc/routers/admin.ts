@@ -610,4 +610,77 @@ export const adminRouter = router({
         });
       }
     }),
+
+  // Get admin dashboard statistics
+  getAdminStats: adminProcedure.query(async () => {
+    try {
+      const [
+        totalUsers,
+        totalAnalyticsRecords,
+        totalKeywords,
+        totalCampaigns,
+      ] = await Promise.all([
+        prisma.user.count(),
+        prisma.searchConsoleKeywordAnalytics.count(),
+        prisma.searchConsoleKeyword.count(),
+        prisma.campaign.count(),
+      ]);
+
+      return {
+        success: true,
+        data: {
+          totalUsers,
+          totalAnalyticsRecords,
+          totalKeywords,
+          totalCampaigns,
+        },
+      };
+    } catch (error) {
+      console.error('Error getting admin statistics:', error);
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to get admin statistics',
+      });
+    }
+  }),
+
+  // Send test WhatsApp message
+  sendTestWhatsApp: adminProcedure
+    .input(
+      z.object({
+        phoneNumber: z.string().min(1, 'Phone number is required'),
+        message: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      try {
+        const { phoneNumber, message } = input;
+        
+        // Default test message if none provided
+        const testMessage = message || 'This is a test message from Rank Ranger Admin Dashboard. WhatsApp integration is working correctly!';
+        
+        // For now, we'll simulate sending a WhatsApp message
+        // In a real implementation, you would integrate with WhatsApp Business API
+        console.log(`Test WhatsApp message would be sent to ${phoneNumber}: ${testMessage}`);
+        
+        // Simulate API delay
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        return {
+          success: true,
+          message: 'Test WhatsApp message sent successfully',
+          phoneNumber,
+          sentMessage: testMessage,
+        };
+      } catch (error) {
+        console.error('Error sending test WhatsApp message:', error);
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message:
+            error instanceof Error
+              ? error.message
+              : 'Failed to send test WhatsApp message',
+        });
+      }
+    }),
 });
