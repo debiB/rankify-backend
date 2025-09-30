@@ -81,6 +81,9 @@ out
 .nuxt
 dist
 
+# Debug exports
+debug/
+
 # Gatsby files
 .cache/
 public
