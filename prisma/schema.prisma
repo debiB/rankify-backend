@@ -377,6 +377,8 @@ enum MilestoneType_type {
 
 enum KeywordCannibalizationAuditType {
   CUSTOM
+  INITIAL
+  SCHEDULED
 }
 
 enum KeywordCannibalizationAuditStatus {
