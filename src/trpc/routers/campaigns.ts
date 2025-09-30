@@ -3024,8 +3024,8 @@ export const campaignsRouter = router({
       }
     }),
 
-  // Get unused potential keywords (CTR < 5%) for a campaign
-  getUnusedPotential: protectedProcedure
+  // Get unused potential keywords (CTR < 5%) for a campaign (admin only)
+  getUnusedPotential: adminProcedure
     .input(
       z.object({
         campaignId: z.string(),
@@ -3090,7 +3090,11 @@ export const campaignsRouter = router({
                 dailyStats: {
                   where: {
                     date: {
-                      gte: new Date(parseInt(selectedYear), selectedMonthNum - 1, 1),
+                      gte: new Date(
+                        parseInt(selectedYear),
+                        selectedMonthNum - 1,
+                        1
+                      ),
                       lt: new Date(parseInt(selectedYear), selectedMonthNum, 1),
                     },
                   },
@@ -3113,10 +3117,11 @@ export const campaignsRouter = router({
 
         for (const keyword of analytics.keywords) {
           const monthlyComputed = keyword.monthlyComputed[0];
-          
+
           if (monthlyComputed && monthlyComputed.impressions > 0) {
-            const ctr = (monthlyComputed.clicks / monthlyComputed.impressions) * 100;
-            
+            const ctr =
+              (monthlyComputed.clicks / monthlyComputed.impressions) * 100;
+
             // Only include keywords with CTR < 5%
             if (ctr < 5) {
               // Calculate search volume from daily stats for the selected month
