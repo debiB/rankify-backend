@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { router, protectedProcedure } from '../context';
+import { router, protectedProcedure, adminProcedure } from '../context';
 import { keywordCannibalizationService } from '../../services/keywordCannibalization';
 
 
@@ -8,7 +8,7 @@ export const cannibalizationRouter = router({
   /**
    * Run audit with custom date range
    */
-  runAudit: protectedProcedure
+  runAudit: adminProcedure
     .input(
       z.object({
         campaignId: z.string(),
@@ -29,7 +29,7 @@ export const cannibalizationRouter = router({
    * Get cannibalization results for a campaign
    * Defaults to last 3 months if no date range provided
    */
-  getResults: protectedProcedure
+  getResults: adminProcedure
     .input(
       z.object({
         campaignId: z.string(),
@@ -59,7 +59,7 @@ export const cannibalizationRouter = router({
     }),
 
 
-  getKeywordDetails: protectedProcedure
+  getKeywordDetails: adminProcedure
     .input(
       z.object({
         campaignId: z.string(),
@@ -94,7 +94,7 @@ export const cannibalizationRouter = router({
   /**
    * Get cannibalization summary statistics for a campaign
    */
-  getSummary: protectedProcedure
+  getSummary: adminProcedure
     .input(
       z.object({
         campaignId: z.string(),
@@ -180,7 +180,7 @@ export const cannibalizationRouter = router({
   /**
    * Get top cannibalized keywords (highest overlap percentages)
    */
-  getTopCannibalized: protectedProcedure
+  getTopCannibalized: adminProcedure
     .input(
       z.object({
         campaignId: z.string(),
