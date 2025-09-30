@@ -4,6 +4,8 @@ import { usersRouter } from './routers/users';
 import { googleAccountsRouter } from './routers/googleAccounts';
 import { campaignsRouter } from './routers/campaigns';
 import { adminRouter } from './routers/admin';
+import { milestonesRouter } from './routers/milestones';
+import { whatsappRouter } from './routers/whatsapp';
 import { cannibalizationRouter } from './routers/cannibalization';
 
 export const appRouter = router({
@@ -12,6 +14,8 @@ export const appRouter = router({
   googleAccounts: googleAccountsRouter,
   campaigns: campaignsRouter,
   admin: adminRouter,
+  milestones: milestonesRouter,
+  whatsapp: whatsappRouter,
   cannibalization: cannibalizationRouter,
 });
 

@@ -72,9 +72,7 @@ export const cannibalizationRouter = router({
     )
     .query(async ({ input, ctx }) => {
       // Get the latest audit for the campaign
-      const latestAudit = await (
-        ctx.prisma as any
-      ).keywordCannibalizationAudit.findFirst({
+      const latestAudit = await ctx.prisma.keywordCannibalizationAudit.findFirst({
         where: {
           campaignId: input.campaignId,
           status: 'COMPLETED',
@@ -107,9 +105,7 @@ export const cannibalizationRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
-      const latestAudit = await (
-        ctx.prisma as any
-      ).keywordCannibalizationAudit.findFirst({
+      const latestAudit = await ctx.prisma.keywordCannibalizationAudit.findFirst({
         where: {
           campaignId: input.campaignId,
           status: 'COMPLETED',
@@ -200,9 +196,7 @@ export const cannibalizationRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
-      const latestAudit = await (
-        ctx.prisma as any
-      ).keywordCannibalizationAudit.findFirst({
+      const latestAudit = await ctx.prisma.keywordCannibalizationAudit.findFirst({
         where: {
           campaignId: input.campaignId,
           status: 'COMPLETED',
