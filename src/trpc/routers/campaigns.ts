@@ -3,6 +3,7 @@ import { TRPCError } from '@trpc/server';
 import { protectedProcedure, adminProcedure, router } from '../context';
 import { prisma } from '../../utils/prisma';
 import { AnalyticsService } from '../../services/analytics';
+import { keywordCannibalizationService } from '../../services/keywordCannibalization';
 import { searchConsoleService } from '../../services/searchConsole';
 import fs from 'fs';
 import path from 'path';
@@ -647,6 +648,23 @@ export const campaignsRouter = router({
         analyticsService.fetchAndSaveMonthlyTrafficData({
           campaignId: campaign.id,
           waitForAllData: true,
+        });
+
+        // Run initial cannibalization audit (3 months) asynchronously
+        setImmediate(async () => {
+          try {
+            const auditId = await keywordCannibalizationService.runInitialAudit(
+              campaign.id
+            );
+            console.log(
+              `✅ Initial cannibalization audit started for campaign ${campaign.id} (Audit ID: ${auditId})`
+            );
+          } catch (error) {
+            console.error(
+              `💥 Failed to start initial cannibalization audit for campaign ${campaign.id}:`,
+              error
+            );
+          }
         });
 
         return campaign;
