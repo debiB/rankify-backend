@@ -2,9 +2,7 @@ import { z } from 'zod';
 import { router, protectedProcedure, adminProcedure } from '../context';
 import { keywordCannibalizationService } from '../../services/keywordCannibalization';
 
-
 export const cannibalizationRouter = router({
-
   /**
    * Run audit with custom date range
    */
@@ -34,30 +32,36 @@ export const cannibalizationRouter = router({
       z.object({
         campaignId: z.string(),
         limit: z.number().min(1).max(100).optional().default(50),
-        startDate: z.string().optional().transform((str) => str ? new Date(str) : undefined),
-        endDate: z.string().optional().transform((str) => str ? new Date(str) : undefined),
+        startDate: z
+          .string()
+          .optional()
+          .transform((str) => (str ? new Date(str) : undefined)),
+        endDate: z
+          .string()
+          .optional()
+          .transform((str) => (str ? new Date(str) : undefined)),
       })
     )
     .query(async ({ input }) => {
       // Default to last 3 months if no date range provided
       let startDate = input.startDate;
       let endDate = input.endDate;
-      
+
       if (!startDate || !endDate) {
         endDate = new Date();
         startDate = new Date();
         startDate.setMonth(startDate.getMonth() - 3);
       }
-      
-      const results = await keywordCannibalizationService.getCannibalizationResults(
-        input.campaignId,
-        input.limit,
-        startDate,
-        endDate
-      );
+
+      const results =
+        await keywordCannibalizationService.getCannibalizationResults(
+          input.campaignId,
+          input.limit,
+          startDate,
+          endDate
+        );
       return results;
     }),
-
 
   getKeywordDetails: adminProcedure
     .input(
@@ -68,7 +72,9 @@ export const cannibalizationRouter = router({
     )
     .query(async ({ input, ctx }) => {
       // Get the latest audit for the campaign
-      const latestAudit = await (ctx.prisma as any).keywordCannibalizationAudit.findFirst({
+      const latestAudit = await (
+        ctx.prisma as any
+      ).keywordCannibalizationAudit.findFirst({
         where: {
           campaignId: input.campaignId,
           status: 'COMPLETED',
@@ -101,7 +107,9 @@ export const cannibalizationRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
-      const latestAudit = await (ctx.prisma as any).keywordCannibalizationAudit.findFirst({
+      const latestAudit = await (
+        ctx.prisma as any
+      ).keywordCannibalizationAudit.findFirst({
         where: {
           campaignId: input.campaignId,
           status: 'COMPLETED',
@@ -147,8 +155,10 @@ export const cannibalizationRouter = router({
         latestAudit.results.length > 0
           ? latestAudit.results.reduce((sum: number, result: any) => {
               const avgForKeyword =
-                result.competingPages.reduce((s: number, page: any) => s + page.overlapPercentage, 0) /
-                result.competingPages.length;
+                result.competingPages.reduce(
+                  (s: number, page: any) => s + page.overlapPercentage,
+                  0
+                ) / result.competingPages.length;
               return sum + avgForKeyword;
             }, 0) / latestAudit.results.length
           : 0;
@@ -168,11 +178,13 @@ export const cannibalizationRouter = router({
         },
         totalKeywords: latestAudit.totalKeywords,
         keywordsWithCannibalization: cannibalizationByKeyword,
-        cannibalizationRate: latestAudit.totalKeywords > 0 
-          ? (cannibalizationByKeyword / latestAudit.totalKeywords) * 100 
-          : 0,
+        cannibalizationRate:
+          latestAudit.totalKeywords > 0
+            ? (cannibalizationByKeyword / latestAudit.totalKeywords) * 100
+            : 0,
         totalCompetingPages,
-        averageOverlapPercentage: Math.round(averageOverlapPercentage * 100) / 100,
+        averageOverlapPercentage:
+          Math.round(averageOverlapPercentage * 100) / 100,
         highImpactCannibalization: highImpactCount,
       };
     }),
@@ -188,7 +200,9 @@ export const cannibalizationRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
-      const latestAudit = await (ctx.prisma as any).keywordCannibalizationAudit.findFirst({
+      const latestAudit = await (
+        ctx.prisma as any
+      ).keywordCannibalizationAudit.findFirst({
         where: {
           campaignId: input.campaignId,
           status: 'COMPLETED',
@@ -219,7 +233,9 @@ export const cannibalizationRouter = router({
       const topCannibalized = latestAudit.results
         .map((result: any) => ({
           keyword: result.keyword,
-          maxOverlap: Math.max(...result.competingPages.map((page: any) => page.overlapPercentage)),
+          maxOverlap: Math.max(
+            ...result.competingPages.map((page: any) => page.overlapPercentage)
+          ),
           competingPagesCount: result.competingPages.length,
         }))
         .sort((a: any, b: any) => b.maxOverlap - a.maxOverlap)
