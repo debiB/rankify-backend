@@ -212,3 +212,106 @@ model UserKeywordFavorite {
   @@index([userId])
   @@index([keywordId])
 }
+
+// Brand Profile model for brand personalization
+model BrandProfile {
+  id          String   @id @default(cuid())
+  name        String
+  toneData    Json
+  lastUpdated DateTime @updatedAt
+  createdAt   DateTime @default(now())
+  urls        BrandProfileUrl[]
+  pdfs        BrandProfilePdf[]
+  otherDocs   BrandProfileOtherDoc[]
+}
+
+model BrandProfileUrl {
+  id            String @id @default(cuid())
+  url           String @db.Text
+  brandProfile  BrandProfile @relation(fields: [brandProfileId], references: [id], onDelete: Cascade)
+  brandProfileId String
+  createdAt     DateTime @default(now())
+  
+  @@index([brandProfileId])
+}
+
+model BrandProfilePdf {
+  id            String @id @default(cuid())
+  url           String @db.Text
+  brandProfile  BrandProfile @relation(fields: [brandProfileId], references: [id], onDelete: Cascade)
+  brandProfileId String
+  createdAt     DateTime @default(now())
+  
+  @@index([brandProfileId])
+}
+
+model BrandProfileOtherDoc {
+  id            String @id @default(cuid())
+  url           String @db.Text
+  brandProfile  BrandProfile @relation(fields: [brandProfileId], references: [id], onDelete: Cascade)
+  brandProfileId String
+  createdAt     DateTime @default(now())
+  
+  @@index([brandProfileId])
+}
+
+// Keyword Analysis model for keyword research and content analysis
+model KeywordAnalysis {
+  id                        String   @id @default(cuid())
+  keyword                   String
+  pageGoals                 Json
+  h1Headlines               Json
+  h2Headlines               Json
+  h3Headlines               Json
+  avgWordCount              Int
+  keywordDensity            Float
+  suggestedQA               Json
+  recommendedExternalLink   String?
+  analysisDate              DateTime @default(now())
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+  contentPlans              ContentPlan[]
+
+  @@index([keyword])
+  @@index([analysisDate])
+}
+
+// Content Plan model for content planning and approval
+model ContentPlan {
+  id                    String   @id @default(cuid())
+  keywordAnalysisId     String
+  articleGoal           String   @db.Text
+  headlines             Json     // Array of strings
+  subheadings           Json     // Array of strings
+  recommendedWordCount  Int
+  keywordPlacement      Json     // Array of strings
+  adminApproved         Boolean  @default(false)
+  style                 String   @db.Text
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  keywordAnalysis       KeywordAnalysis @relation(fields: [keywordAnalysisId], references: [id], onDelete: Cascade)
+  generatedContents     GeneratedContent[]
+
+  @@index([keywordAnalysisId])
+  @@index([adminApproved])
+}
+
+// Generated Content model for AI-generated articles
+model GeneratedContent {
+  id            String   @id @default(cuid()) @map("id")
+  contentPlanId String   @map("contentPlanId")
+  articleText   String   @db.Text @map("articleText")
+  style         String   @map("style")
+  intro         String   @db.Text @map("intro")
+  qnaSections   Json     // Array of strings @map("qnaSections")
+  externalLink  String?  @map("externalLink")
+  finalized     Boolean  @default(false) @map("finalized")
+  createdAt     DateTime @default(now()) @map("createdAt")
+
+  contentPlan   ContentPlan @relation(fields: [contentPlanId], references: [id], onDelete: Cascade)
+
+  @@index([contentPlanId])
+  @@index([finalized])
+  @@map("GeneratedContent")
+}

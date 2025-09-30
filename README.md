@@ -91,6 +91,7 @@ JWT_EXPIRES_IN="7d"
 PORT=3001
 NODE_ENV=development
 CORS_ORIGIN="http://localhost:3000"
+GEMINI_API_KEY="your-gemini-api-key-here"
 ```
 
 ## 🛠️ Development
@@ -122,10 +123,10 @@ For development, the server will automatically restart when you make changes to 
 
 ### Cron & Data Flows
 - Cron jobs (monthly/daily) call `fetchDailyKeywordData`, which now also computes/updates `SearchConsoleKeywordMonthlyComputed`.
-- `createCampaign`, `updateCampaign` (when startingDate changes), and admin “Get All Data” flows trigger the same computation.
+- `createCampaign`, `updateCampaign` (when startingDate changes), and admin "Get All Data" flows trigger the same computation.
 
 ### Data Deletion
-- Admin “Delete All Data” deletes in safe FK order:
+- Admin "Delete All Data" deletes in safe FK order:
   1) `SearchConsoleKeywordMonthlyComputed`
   2) `SearchConsoleKeywordMonthlyStat`
   3) `SearchConsoleKeyword`
@@ -133,4 +134,32 @@ For development, the server will automatically restart when you make changes to 
   5) `SearchConsoleTrafficDaily`
   6) `SearchConsoleTrafficMonthly`
   7) `SearchConsoleTrafficAnalytics`
-- After deletion, use “Get All Data” to repopulate, or wait for cron.
+- After deletion, use "Get All Data" to repopulate, or wait for cron.
+
+## 🎨 Brand Personalization Module
+
+### Overview
+The Brand Personalization module allows admins to upload brand resources (URLs, PDFs, and other documents) to create a brand profile. The system analyzes these resources using Google's Gemini API to extract brand tone, style, and structure preferences.
+
+### Database Models
+- `BrandProfile` - Main brand profile containing name and tone data
+- `BrandProfileUrl` - URLs associated with a brand profile
+- `BrandProfilePdf` - PDFs associated with a brand profile
+- `BrandProfileOtherDoc` - Other documents associated with a brand profile
+
+### API Endpoints (tRPC)
+- `brand.uploadResources` - Upload URLs/docs; process with Gemini API to extract tone/style; store in BrandProfile
+- `brand.getProfile` - Return stored brand tone/profile
+- `brand.updateProfile` - Update/fine-tune tone memory
+
+### Workflow
+1. Admin uploads URLs, PDFs, or other reference docs
+2. Backend analyzes resources via Gemini API:
+   - Detect brand tone (formal, casual, persuasive)
+   - Detect style (sentence length, readability, first-person usage "we/our/site")
+   - Detect structure preferences (headline/subheading styles)
+3. Store analysis in BrandProfile for reuse
+4. Admin can update/fine-tune memory as needed
+
+### Environment Setup
+To use the Brand Personalization module, you need to set the `GEMINI_API_KEY` environment variable in your `.env` file with a valid Google Gemini API key.
