@@ -3,6 +3,7 @@ import { router, protectedProcedure, adminProcedure } from '../context';
 import { PrismaClient } from '@prisma/client';
 import { hashPassword } from '../../utils/auth';
 import { sendTemporaryPassword } from '../../utils/email';
+import { inferRouterOutputs } from '@trpc/server';
 
 const prisma = new PrismaClient();
 
@@ -387,7 +388,7 @@ export const usersRouter = router({
         },
       });
 
-      const campaigns = userCampaigns.map(uc => ({
+      const campaigns = userCampaigns.map((uc: any) => ({
         id: uc.campaign.id,
         name: uc.campaign.name,
         status: uc.campaign.status,

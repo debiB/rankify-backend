@@ -37,7 +37,12 @@ async function testCannibalizationData() {
     console.log('=== TEST 1: Running Manual Cannibalization Audit ===');
     
     try {
-      const auditId = await cannibalizationService.runAudit(campaign.id, 'MANUAL' as any);
+      // Use a 30-day date range for the manual audit
+      const endDate = new Date();
+      const startDate = new Date();
+      startDate.setDate(startDate.getDate() - 30);
+      
+      const auditId = await cannibalizationService.runCustomAudit(campaign.id, startDate, endDate);
       console.log(`✅ Audit started with ID: ${auditId}`);
       
       // Wait a moment for the audit to process

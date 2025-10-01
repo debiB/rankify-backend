@@ -2,8 +2,8 @@ import { PrismaClient, Campaign, GoogleAccount } from '@prisma/client';
 import moment from 'moment-timezone';
 import { SearchConsoleService } from './searchConsole';
 import { webmasters_v3 } from 'googleapis';
+import { prisma } from '../utils/prisma';
 
-const prisma = new PrismaClient();
 const searchConsoleService = new SearchConsoleService();
 
 const CANNIBALIZATION_THRESHOLD = 20; // 20% overlap threshold
@@ -67,7 +67,7 @@ export class KeywordCannibalizationService {
     }
 
     // Create audit record
-    const audit = await (prisma as any).keywordCannibalizationAudit.create({
+    const audit = await prisma.keywordCannibalizationAudit.create({
       data: {
         campaignId,
         startDate,
@@ -82,7 +82,7 @@ export class KeywordCannibalizationService {
       const keywordData = await this.fetchKeywordPageData(campaign, campaign.googleAccount, startDate, endDate);
       
       if (!keywordData || keywordData.length === 0) {
-        const updatedAudit = await (prisma as any).keywordCannibalizationAudit.update({
+        const updatedAudit = await prisma.keywordCannibalizationAudit.update({
           where: { id: audit.id },
           data: { 
             status: AuditStatus.COMPLETED,
@@ -100,7 +100,7 @@ export class KeywordCannibalizationService {
       await this.saveAuditResults(audit.id, cannibalizationResults);
       
       // Update audit status
-      await (prisma as any).keywordCannibalizationAudit.update({
+      await prisma.keywordCannibalizationAudit.update({
         where: { id: audit.id },
         data: { 
           status: AuditStatus.COMPLETED,
@@ -332,7 +332,7 @@ export class KeywordCannibalizationService {
    */
   private async saveAuditResults(auditId: string, results: CannibalizationData[]): Promise<void> {
     for (const result of results) {
-      const cannibalizationResult = await (prisma as any).keywordCannibalizationResult.create({
+      const cannibalizationResult = await prisma.keywordCannibalizationResult.create({
         data: {
           auditId,
           keyword: result.keyword,
@@ -343,7 +343,7 @@ export class KeywordCannibalizationService {
 
       // Save competing pages
       if (result.competingPages.length > 0) {
-        await (prisma as any).keywordCompetingPage.createMany({
+        await prisma.keywordCompetingPage.createMany({
           data: result.competingPages.map(page => ({
             resultId: cannibalizationResult.id,
             pageUrl: page.url,
@@ -388,7 +388,7 @@ export class KeywordCannibalizationService {
       ];
     }
 
-    const existingAudit = await (prisma as any).keywordCannibalizationAudit.findFirst({
+    const existingAudit = await prisma.keywordCannibalizationAudit.findFirst({
       where: auditWhere,
       orderBy: { createdAt: 'desc' },
       include: {
@@ -421,7 +421,7 @@ export class KeywordCannibalizationService {
    * Get audit history for a campaign
    */
   async getAuditHistory(campaignId: string, limit: number = 10) {
-    return await (prisma as any).keywordCannibalizationAudit.findMany({
+    return await prisma.keywordCannibalizationAudit.findMany({
       where: { campaignId },
       orderBy: { createdAt: 'desc' },
       take: limit,

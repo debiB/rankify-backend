@@ -18,6 +18,7 @@ model User {
   updatedAt                    DateTime                      @updatedAt
   hasChangedPassword           Boolean                       @default(false)
   adminNotificationPreferences AdminNotificationPreferences?
+  adminNotificationPreferencesGlobal AdminNotificationPreferencesGlobal?
   campaigns                    Campaign[]
   campaignUsers                CampaignUser[]
   emailPreferences             UserCampaignEmailPreference[]
@@ -93,6 +94,7 @@ model SearchConsoleKeyword {
   analytics       SearchConsoleKeywordAnalytics     @relation(fields: [analyticsId], references: [id], onDelete: Cascade)
   dailyStats      SearchConsoleKeywordDailyStat[]
   monthlyStats    SearchConsoleKeywordMonthlyStat[]
+  monthlyComputed SearchConsoleKeywordMonthlyComputed[]
   sentMilestones  SentMilestone[]
   favorites       UserKeywordFavorite[]
 
@@ -316,13 +318,13 @@ model AdminNotificationPreferencesGlobal {
 }
 
 model UserNotificationPreferences {
-  id                     String   @id
+  id                     String   @id @default(cuid())
   userId                 String   @unique
   enableEmail            Boolean  @default(true)
   enableWhatsApp         Boolean  @default(true)
   enableAllNotifications Boolean  @default(true)
   createdAt              DateTime @default(now())
-  updatedAt              DateTime
+  updatedAt              DateTime @updatedAt
   User                   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
@@ -436,4 +438,23 @@ model UserKeywordFavorite {
   @@unique([userId, keywordId])
   @@index([userId])
   @@index([keywordId])
+}
+
+// Monthly computed data for keywords (impressions, clicks, etc.)
+model SearchConsoleKeywordMonthlyComputed {
+  id                  String               @id @default(cuid())
+  keywordId           String
+  month               Int
+  year                Int
+  averageRank         Float
+  impressions         Int
+  clicks              Int
+  topRankingPageUrl   String               @db.Text
+  calcWindowDays      Int
+  computedAt          DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  keyword             SearchConsoleKeyword @relation(fields: [keywordId], references: [id], onDelete: Cascade)
+
+  @@unique([keywordId, month, year])
+  @@index([month, year])
 }

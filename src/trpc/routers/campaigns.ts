@@ -8,6 +8,8 @@ import { searchConsoleService } from '../../services/searchConsole';
 import fs from 'fs';
 import path from 'path';
 import moment from 'moment';
+// Import Prisma types to ensure proper type checking
+import type { Prisma, PrismaClient } from '@prisma/client';
 
 const analyticsService = new AnalyticsService();
 
@@ -3264,17 +3266,17 @@ export const campaignsRouter = router({
         const unusedPotentialKeywords = [];
 
         for (const keyword of analytics.keywords) {
-          const monthlyComputed = keyword.monthlyComputed[0];
+          const monthlyStat = keyword.monthlyComputed[0];
 
-          if (monthlyComputed && monthlyComputed.impressions > 0) {
+          if (monthlyStat && monthlyStat.impressions > 0) {
             const ctr =
-              (monthlyComputed.clicks / monthlyComputed.impressions) * 100;
+              (monthlyStat.clicks / monthlyStat.impressions) * 100;
 
             // Only include keywords with CTR < 5%
             if (ctr < 5) {
               // Calculate search volume from daily stats for the selected month
               const monthSearchVolume = keyword.dailyStats.reduce(
-                (sum, stat) => sum + (stat.searchVolume || 0),
+                (sum: number, stat: any) => sum + (stat.searchVolume || 0),
                 0
               );
 
@@ -3282,16 +3284,16 @@ export const campaignsRouter = router({
                 id: keyword.id,
                 keyword: keyword.keyword,
                 ctr: parseFloat(ctr.toFixed(2)),
-                impressions: monthlyComputed.impressions,
-                clicks: monthlyComputed.clicks,
-                position: monthlyComputed.averageRank,
+                impressions: monthlyStat.impressions,
+                clicks: monthlyStat.clicks,
+                position: monthlyStat.averageRank,
                 searchVolume: monthSearchVolume,
                 topPageLink: (() => {
                   try {
-                    const url = monthlyComputed.topRankingPageUrl || '';
+                    const url = monthlyStat.topRankingPageUrl || '';
                     return url ? decodeURIComponent(url) : '';
                   } catch {
-                    return monthlyComputed.topRankingPageUrl || '';
+                    return monthlyStat.topRankingPageUrl || '';
                   }
                 })(),
               });

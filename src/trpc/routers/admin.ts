@@ -487,13 +487,13 @@ export const adminRouter = router({
           });
         }
 
-        let preferences = await prisma.adminNotificationPreferences.findUnique({
+        let preferences = await (prisma as any)['adminNotificationPreferences'].findUnique({
           where: { userId },
         });
 
         // Create default preferences if none exist
         if (!preferences) {
-          preferences = await prisma.adminNotificationPreferences.create({
+          preferences = await (prisma as any)['adminNotificationPreferences'].create({
             data: {
               userId,
               enableEmail: true,
@@ -502,7 +502,7 @@ export const adminRouter = router({
               positionThresholds: JSON.stringify([1, 2, 3]),
               clickThresholds: JSON.stringify([100, 500, 1000]),
             },
-          });
+          } as any);
         }
 
         // Parse JSON thresholds
@@ -571,7 +571,7 @@ export const adminRouter = router({
           });
         }
 
-        const preferences = await prisma.adminNotificationPreferences.upsert({
+        const preferences = await (prisma as any)['adminNotificationPreferences'].upsert({
           where: { userId },
           update: {
             enableEmail: enableEmail ?? true,
@@ -591,7 +591,7 @@ export const adminRouter = router({
             clickThresholds: JSON.stringify(clickThresholds || [100, 500, 1000]),
             whatsAppGroupId: whatsAppGroupId,
             campaignId: campaignId,
-          },
+          } as any,
         });
 
         // Parse JSON thresholds for response
