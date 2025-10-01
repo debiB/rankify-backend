@@ -3077,99 +3077,266 @@ export const campaignsRouter = router({
       try {
         const campaign = await prisma.campaign.findUnique({
           where: { id: input.campaignId },
-          include: { googleAccount: true },
         });
 
-        if (!campaign || !campaign.googleAccount) {
+        if (!campaign) {
           throw new TRPCError({
             code: 'NOT_FOUND',
-            message: 'Campaign or Google account not found',
+            message: 'Campaign not found',
           });
         }
 
-        // Parse and validate dates
-        const startAt = moment.utc(input.startDate, 'YYYY-MM-DD', true);
-        const endAt = moment.utc(input.endDate, 'YYYY-MM-DD', true);
-        if (!startAt.isValid() || !endAt.isValid()) {
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: 'Invalid dates',
-          });
-        }
-        if (endAt.isBefore(startAt)) {
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: 'endDate before startDate',
-          });
-        }
-
-        // Respect GSC 3-day delay: cap end date at today-3
-        const capEnd = moment.utc().subtract(3, 'days').endOf('day');
-        const effectiveEnd = endAt.isAfter(capEnd) ? capEnd : endAt;
-
-        // Fetch raw rows with date, query, page dimensions for the range
-        const rows = await searchConsoleService.getAnalytics({
-          campaign: campaign as any,
-          googleAccount: campaign.googleAccount as any,
-          startAt: startAt,
-          endAt: effectiveEnd,
-          dimensions: ['date', 'query', 'page'],
-          waitForAllData: true,
-          exactUrlMatch: false,
+        // Get keyword data for the site
+        const keywordAnalytics = await prisma.searchConsoleKeywordAnalytics.findFirst({
+          where: { siteUrl: campaign.searchConsoleSite },
+          include: {
+            keywords: {
+              include: {
+                dailyStats: true,
+              },
+            },
+          },
         });
 
-        if (!rows || rows.length === 0) {
-          return {
-            success: true,
-            message: 'No rows returned from GSC',
-            filePath: null,
-            count: 0,
-          };
+        if (!keywordAnalytics) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'No keyword data found',
+          });
         }
 
-        const debugDir = path.join(process.cwd(), 'debug');
-        if (!fs.existsSync(debugDir)) {
-          fs.mkdirSync(debugDir, { recursive: true });
+        const startDate = new Date(input.startDate);
+        const endDate = new Date(input.endDate);
+
+        if (startDate > endDate) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Start date must be before end date',
+          });
         }
 
-        const safeSite = campaign.searchConsoleSite
-          .replace(/[^a-zA-Z0-9-_\.]/g, '_')
-          .slice(-80);
-        const filename = `gsc_keywords_raw_${safeSite}_${startAt.format(
-          'YYYYMMDD'
-        )}-${effectiveEnd.format('YYYYMMDD')}.json`;
-        const filePath = path.join(debugDir, filename);
+        // Filter daily stats for the date range
+        const filteredDailyStats: any[] = [];
 
-        fs.writeFileSync(
-          filePath,
-          JSON.stringify(
-            {
-              meta: {
+        for (const keyword of keywordAnalytics.keywords) {
+          for (const stat of keyword.dailyStats) {
+            const statDate = new Date(stat.date);
+            if (statDate >= startDate && statDate <= endDate) {
+              // For daily stats, we need to calculate CTR from the computed monthly data
+              // or use searchVolume as a proxy for impressions
+              filteredDailyStats.push({
+                id: stat.id,
                 campaignId: campaign.id,
-                siteUrl: campaign.searchConsoleSite,
-                startDate: startAt.format('YYYY-MM-DD'),
-                endDate: effectiveEnd.format('YYYY-MM-DD'),
-                dimensions: ['date', 'query', 'page'],
-                count: rows.length,
-              },
-              rows,
-            },
-            null,
-            2
-          )
-        );
+                keywordId: keyword.id,
+                date: statDate.toISOString(),
+                searchVolume: stat.searchVolume,
+                averageRank: stat.averageRank || 0,
+                topRankingPageUrl: stat.topRankingPageUrl,
+              });
+            }
+          }
+        }
 
-        return {
-          success: true,
-          message: 'Exported raw GSC rows',
-          filePath,
-          count: rows.length,
-        };
+        return filteredDailyStats;
       } catch (error) {
-        console.error('Error exporting keyword raw range:', error);
+        console.error('Error in exportKeywordRawRange:', error);
+        if (error instanceof TRPCError) {
+          throw error;
+        }
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
-          message: 'Failed to export raw GSC rows for date range',
+          message: `Failed to fetch keyword data: ${
+            error instanceof Error ? error.message : 'Unknown error'
+          }`,
+        });
+      }
+    }),
+
+  // Get unused potential keywords (CTR < 5%) for a campaign and selected month
+  getUnusedPotential: adminProcedure
+    .input(
+      z.object({
+        campaignId: z.string(),
+        selectedMonth: z.string(), // Format: "Month YYYY" (e.g., "October 2025")
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      try {
+        const { campaignId, selectedMonth } = input;
+
+        // Get the campaign
+        const campaign = await prisma.campaign.findUnique({
+          where: { id: campaignId },
+          include: {
+            googleAccount: true,
+          },
+        });
+
+        if (!campaign) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'Campaign not found',
+          });
+        }
+
+        // Check if user has access to this campaign
+        if (campaign.userId !== ctx.user.id && ctx.user.role !== 'ADMIN') {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'You do not have access to this campaign',
+          });
+        }
+
+        // Parse the selected month to get month and year
+        const [monthName, yearStr] = selectedMonth.split(' ');
+        const year = parseInt(yearStr);
+        
+        const monthNames = [
+          'January', 'February', 'March', 'April', 'May', 'June',
+          'July', 'August', 'September', 'October', 'November', 'December'
+        ];
+        const month = monthNames.indexOf(monthName) + 1; // 1-based month
+
+        if (month === 0 || isNaN(year)) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Invalid month format',
+          });
+        }
+
+        // Get keyword analytics for the site
+        let keywordAnalytics = await prisma.searchConsoleKeywordAnalytics.findFirst({
+          where: { siteUrl: campaign.searchConsoleSite },
+          include: {
+            keywords: {
+              include: {
+                dailyStats: true,
+                monthlyStats: true,
+              },
+            },
+          },
+        });
+
+        if (!keywordAnalytics) {
+          // If no data exists, fetch from Search Console
+          await analyticsService.fetchDailyKeywordData({
+            campaignId: campaign.id,
+            waitForAllData: true,
+          });
+
+          // Try again after fetching
+          keywordAnalytics = await prisma.searchConsoleKeywordAnalytics.findFirst({
+            where: { siteUrl: campaign.searchConsoleSite },
+            include: {
+              keywords: {
+                include: {
+                  dailyStats: true,
+                  monthlyStats: true,
+                },
+              },
+            },
+          });
+
+          if (!keywordAnalytics) {
+            return { keywords: [] };
+          }
+        }
+
+        // Filter keywords with CTR < 5% for the selected month
+        const unusedPotentialKeywords = [];
+
+        // Get computed monthly data for all keywords in one query
+        const monthlyComputedData = await prisma.searchConsoleKeywordMonthlyComputed.findMany({
+          where: {
+            keywordId: {
+              in: keywordAnalytics.keywords.map(k => k.id)
+            },
+            month: month,
+            year: year
+          }
+        });
+
+        for (const keyword of keywordAnalytics.keywords) {
+          // Find computed data for this keyword
+          const monthlyComputed = monthlyComputedData.find(
+            data => data.keywordId === keyword.id
+          );
+
+          // Calculate CTR from clicks and impressions
+          let ctr = 0;
+          if (monthlyComputed && monthlyComputed.impressions > 0) {
+            ctr = (monthlyComputed.clicks / monthlyComputed.impressions) * 100;
+          }
+
+          // If we have monthly data and CTR < 5%
+          if (monthlyComputed && ctr < 5) {
+            // Find top page for this keyword in the selected month
+            const dailyStatsForMonth = keyword.dailyStats.filter(stat => {
+              const statDate = new Date(stat.date);
+              return (
+                statDate.getMonth() + 1 === month &&
+                statDate.getFullYear() === year
+              );
+            });
+
+            // Aggregate data for the month
+            let totalImpressions = 0;
+            let totalPosition = 0;
+            let topPageLink = '';
+
+            // Calculate totals and find top page by search volume (which represents impressions)
+            const pageImpressions: Record<string, number> = {};
+            dailyStatsForMonth.forEach(stat => {
+              totalImpressions += stat.searchVolume;
+              totalPosition += stat.averageRank || 0;
+              
+              if (stat.topRankingPageUrl) {
+                pageImpressions[stat.topRankingPageUrl] = 
+                  (pageImpressions[stat.topRankingPageUrl] || 0) + stat.searchVolume;
+              }
+            });
+
+            // Find the page with the most impressions
+            let maxImpressions = 0;
+            for (const [page, impressions] of Object.entries(pageImpressions)) {
+              if (impressions > maxImpressions) {
+                maxImpressions = impressions;
+                topPageLink = page;
+              }
+            }
+
+            // Calculate average position
+            const averagePosition = dailyStatsForMonth.length > 0 
+              ? totalPosition / dailyStatsForMonth.length 
+              : 0;
+
+            unusedPotentialKeywords.push({
+              id: keyword.id,
+              keyword: keyword.keyword,
+              ctr: ctr,
+              impressions: monthlyComputed.impressions,
+              clicks: monthlyComputed.clicks,
+              position: parseFloat(averagePosition.toFixed(2)),
+              searchVolume: monthlyComputed.impressions, // Using impressions as search volume proxy
+              topPageLink,
+            });
+          }
+        }
+
+        // Sort by impressions descending
+        unusedPotentialKeywords.sort((a, b) => b.impressions - a.impressions);
+
+        return { keywords: unusedPotentialKeywords };
+      } catch (error) {
+        console.error('Error in getUnusedPotential:', error);
+        if (error instanceof TRPCError) {
+          throw error;
+        }
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to fetch unused potential keywords: ${
+            error instanceof Error ? error.message : 'Unknown error'
+          }`,
         });
       }
     }),
