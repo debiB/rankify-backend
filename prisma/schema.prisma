@@ -8,6 +8,7 @@ datasource db {
 }
 
 model User {
+<<<<<<< HEAD
   id                           String                        @id @default(cuid())
   email                        String                        @unique
   password                     String
@@ -24,6 +25,190 @@ model User {
   emailPreferences             UserCampaignEmailPreference[]
   userNotificationPreferences  UserNotificationPreferences?
   favorites                    UserKeywordFavorite[]
+=======
+  id                 String                @id @default(cuid())
+  email              String                @unique
+  password           String
+  name               String?
+  firstName          String?
+  lastName           String?
+  phoneNumber        String?
+  countryCode        String?               @default("+972")
+  role               Role                  @default(USER)
+  status             Status                @default(ACTIVE)
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+  hasChangedPassword Boolean               @default(false)
+  campaigns          Campaign[]
+  favorites          UserKeywordFavorite[]
+  settings           UserSettings?
+}
+
+model GoogleAccount {
+  id           String     @id @default(cuid())
+  email        String     @unique
+  accountName  String
+  accessToken  String     @db.Text
+  refreshToken String     @db.Text
+  expiresAt    DateTime
+  isActive     Boolean    @default(true)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  campaigns    Campaign[]
+}
+
+model Campaign {
+  id                   String         @id @default(cuid())
+  name                 String
+  startingDate         DateTime
+  searchConsoleAccount String
+  searchConsoleSite    String
+  keywords             String         @db.Text
+  status               CampaignStatus @default(ACTIVE)
+  userId               String
+  googleAccountId      String
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+  googleAccount        GoogleAccount  @relation(fields: [googleAccountId], references: [id], onDelete: Cascade)
+  user                 User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([googleAccountId], map: "Campaign_googleAccountId_fkey")
+  @@index([userId], map: "Campaign_userId_fkey")
+}
+
+model SearchConsoleKeywordAnalytics {
+  id        String                 @id @default(cuid())
+  siteUrl   String
+  createdAt DateTime               @default(now())
+  updatedAt DateTime               @updatedAt
+  keywords  SearchConsoleKeyword[]
+
+  @@index([siteUrl])
+}
+
+model SearchConsoleKeyword {
+  id              String                                @id @default(cuid())
+  analyticsId     String
+  keyword         String
+  initialPosition Int
+  createdAt       DateTime                              @default(now())
+  updatedAt       DateTime                              @updatedAt
+  analytics       SearchConsoleKeywordAnalytics         @relation(fields: [analyticsId], references: [id], onDelete: Cascade)
+  dailyStats      SearchConsoleKeywordDailyStat[]
+  monthlyComputed SearchConsoleKeywordMonthlyComputed[]
+  monthlyStats    SearchConsoleKeywordMonthlyStat[]
+  favorites       UserKeywordFavorite[]
+
+  @@unique([analyticsId, keyword])
+  @@index([keyword])
+  @@index([analyticsId, keyword])
+}
+
+model SearchConsoleKeywordMonthlyStat {
+  id                String               @id @default(cuid())
+  keywordId         String
+  month             Int
+  year              Int
+  averageRank       Float
+  searchVolume      Int
+  topRankingPageUrl String               @db.Text
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  keyword           SearchConsoleKeyword @relation(fields: [keywordId], references: [id], onDelete: Cascade)
+
+  @@unique([keywordId, month, year])
+  @@index([month, year])
+}
+
+model SearchConsoleKeywordDailyStat {
+  id                String               @id @default(cuid())
+  keywordId         String
+  date              DateTime
+  averageRank       Float?
+  searchVolume      Int
+  topRankingPageUrl String               @db.Text
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  keyword           SearchConsoleKeyword @relation(fields: [keywordId], references: [id], onDelete: Cascade)
+
+  @@unique([keywordId, date])
+  @@index([date])
+}
+
+model SearchConsoleKeywordMonthlyComputed {
+  id                String               @id @default(cuid())
+  keywordId         String
+  month             Int
+  year              Int
+  averageRank       Float
+  impressions       Int
+  clicks            Int
+  topRankingPageUrl String               @db.Text
+  calcWindowDays    Int
+  computedAt        DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  keyword           SearchConsoleKeyword @relation(fields: [keywordId], references: [id], onDelete: Cascade)
+
+  @@unique([keywordId, month, year])
+  @@index([month, year])
+}
+
+model SearchConsoleTrafficAnalytics {
+  id        String                        @id @default(cuid())
+  siteUrl   String
+  createdAt DateTime                      @default(now())
+  updatedAt DateTime                      @updatedAt
+  daily     SearchConsoleTrafficDaily[]
+  monthly   SearchConsoleTrafficMonthly[]
+
+  @@index([siteUrl])
+}
+
+model SearchConsoleTrafficMonthly {
+  id          String                        @id @default(cuid())
+  analyticsId String
+  month       Int
+  year        Int
+  clicks      Int
+  impressions Int
+  createdAt   DateTime                      @default(now())
+  updatedAt   DateTime                      @updatedAt
+  ctr         Float
+  position    Float
+  analytics   SearchConsoleTrafficAnalytics @relation(fields: [analyticsId], references: [id], onDelete: Cascade)
+
+  @@unique([analyticsId, month, year])
+  @@index([month, year])
+}
+
+model SearchConsoleTrafficDaily {
+  id          String                        @id @default(cuid())
+  analyticsId String
+  date        DateTime
+  clicks      Int
+  impressions Int
+  createdAt   DateTime                      @default(now())
+  updatedAt   DateTime                      @updatedAt
+  ctr         Float
+  position    Float
+  analytics   SearchConsoleTrafficAnalytics @relation(fields: [analyticsId], references: [id], onDelete: Cascade)
+
+  @@unique([analyticsId, date])
+  @@index([date])
+}
+
+model UserKeywordFavorite {
+  id        String               @id @default(cuid())
+  userId    String
+  keywordId String
+  createdAt DateTime             @default(now())
+  keyword   SearchConsoleKeyword @relation(fields: [keywordId], references: [id], onDelete: Cascade)
+  user      User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, keywordId])
+  @@index([userId])
+  @@index([keywordId])
+>>>>>>> implement-dashboard-endpoints
 }
 
 enum Role {
@@ -36,6 +221,7 @@ enum Status {
   INACTIVE
 }
 
+<<<<<<< HEAD
 model GoogleAccount {
   id           String     @id @default(cuid())
   email        String     @unique
@@ -458,3 +644,40 @@ model SearchConsoleKeywordMonthlyComputed {
   @@unique([keywordId, month, year])
   @@index([month, year])
 }
+=======
+enum CampaignStatus {
+  ACTIVE
+  PAUSED
+}
+
+// Admin notification preferences
+model AdminNotificationPreferences {
+  id                     String  @id @default(cuid())
+  enableEmail            Boolean @default(true)
+  enableWhatsApp         Boolean @default(true)
+  enableAllNotifications Boolean @default(true)
+  positionThresholds     String  @default("[1,2,3]") // JSON array of position thresholds
+  clicksThreshold        Int     @default(100)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@map("admin_notification_preferences")
+}
+
+// User settings preferences
+model UserSettings {
+  id                    String   @id @default(cuid())
+  userId                String   @unique
+  enableNotifications   Boolean  @default(true)
+  notificationSound     Boolean  @default(true)
+  doNotDisturbMode      Boolean  @default(false)
+  emailNotifications    Boolean  @default(true)
+  systemLanguage        String   @default("en")
+  systemTheme           String   @default("dark")
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_settings")
+}
+>>>>>>> implement-dashboard-endpoints

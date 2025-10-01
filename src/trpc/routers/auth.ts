@@ -37,6 +37,10 @@ export const authRouter = router({
           id: true,
           email: true,
           name: true,
+          firstName: true,
+          lastName: true,
+          phoneNumber: true,
+          countryCode: true,
           role: true,
           status: true,
           hasChangedPassword: true,
@@ -81,6 +85,10 @@ export const authRouter = router({
           id: user.id,
           email: user.email,
           name: user.name,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          phoneNumber: user.phoneNumber,
+          countryCode: user.countryCode,
           role: user.role,
           status: user.status,
           hasChangedPassword: user.hasChangedPassword,
@@ -110,6 +118,73 @@ export const authRouter = router({
           id: true,
           email: true,
           name: true,
+          firstName: true,
+          lastName: true,
+          phoneNumber: true,
+          countryCode: true,
+          role: true,
+          status: true,
+          hasChangedPassword: true,
+          createdAt: true,
+        },
+      });
+
+      return user;
+    }),
+
+  getAccountInfo: protectedProcedure.query(async ({ ctx }) => {
+    const user = await prisma.user.findUnique({
+      where: { id: ctx.user.id },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        firstName: true,
+        lastName: true,
+        phoneNumber: true,
+        countryCode: true,
+        role: true,
+        status: true,
+        hasChangedPassword: true,
+        createdAt: true,
+      },
+    });
+
+    if (!user) {
+      throw new Error('User not found');
+    }
+
+    return user;
+  }),
+
+  updateAccountInfo: protectedProcedure
+    .input(
+      z.object({
+        firstName: z.string().optional().nullable(),
+        lastName: z.string().optional().nullable(),
+        phoneNumber: z.string().optional().nullable(),
+        countryCode: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      // Filter out undefined values and convert empty strings to null
+      const updateData: any = {};
+      if (input.firstName !== undefined) updateData.firstName = input.firstName || null;
+      if (input.lastName !== undefined) updateData.lastName = input.lastName || null;
+      if (input.phoneNumber !== undefined) updateData.phoneNumber = input.phoneNumber || null;
+      if (input.countryCode !== undefined) updateData.countryCode = input.countryCode || null;
+
+      const user = await prisma.user.update({
+        where: { id: ctx.user.id },
+        data: updateData,
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          firstName: true,
+          lastName: true,
+          phoneNumber: true,
+          countryCode: true,
           role: true,
           status: true,
           hasChangedPassword: true,

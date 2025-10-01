@@ -1,94 +1,174 @@
-export interface NotificationTemplate {
-  subject: string;
-  emailBody: string;
-  whatsappMessage: string;
-}
-
 export class NotificationTemplateService {
-  /**
-   * Generate notification template preview for milestone messages
-   */
-  static generateMilestoneTemplate(
-    campaignName: string = '[Campaign Name]',
-    milestoneType: string = '[Position X / X clicks]',
-    value: number | string = '[Value]',
-    keyword?: string,
-    achievedDate?: Date
-  ): NotificationTemplate {
-    const dateStr = achievedDate ? achievedDate.toLocaleDateString() : new Date().toLocaleDateString();
-    const dashboardUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/campaigns/[campaign-id]`;
+  static generateEmailTemplate(data: {
+    campaignName: string;
+    keywordChanges: Array<{
+      keyword: string;
+      oldPosition: number;
+      newPosition: number;
+      change: 'improved' | 'declined';
+    }>;
+    totalKeywords: number;
+    improvedCount: number;
+    declinedCount: number;
+  }): { subject: string; html: string; text: string } {
+    const { campaignName, keywordChanges, totalKeywords, improvedCount, declinedCount } = data;
     
-    // Email subject
-    const subject = `Milestone Reached – Month ${new Date().getMonth() + 1}`;
+    const subject = `Rank Update: ${campaignName} - ${improvedCount} improved, ${declinedCount} declined`;
     
-    // Email body
-    const emailBody = `
+    const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; text-align: center;">
-          <h1 style="margin: 0; font-size: 24px;">🎉 Milestone Achieved!</h1>
+        <h2 style="color: #333;">Ranking Update for ${campaignName}</h2>
+        
+        <div style="background: #f5f5f5; padding: 20px; border-radius: 8px; margin: 20px 0;">
+          <h3 style="margin-top: 0;">Summary</h3>
+          <p><strong>Total Keywords:</strong> ${totalKeywords}</p>
+          <p><strong>Improved:</strong> <span style="color: #10B981;">${improvedCount}</span></p>
+          <p><strong>Declined:</strong> <span style="color: #EF4444;">${declinedCount}</span></p>
         </div>
         
-        <div style="padding: 20px; background: #f9f9f9;">
-          <h2 style="color: #333; margin-top: 0;">Campaign: ${campaignName}</h2>
-          
-          ${keyword ? `<p><strong>🔍 Keyword:</strong> ${keyword}</p>` : ''}
-          
-          <p><strong>🎯 Achievement:</strong> ${milestoneType}</p>
-          <p><strong>📈 Value:</strong> ${value}</p>
-          <p><strong>📅 Date:</strong> ${dateStr}</p>
-          
-          <div style="text-align: center; margin: 30px 0;">
-            <a href="${dashboardUrl}" style="background: #667eea; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">
-              🔗 View Dashboard
-            </a>
-          </div>
-          
-          <p style="text-align: center; color: #666; margin-top: 30px;">
-            Congratulations! We have reached the milestone for ${milestoneType} as of ${dateStr}.
-          </p>
-          
-          <p style="text-align: center; color: #666; margin-top: 30px;">
-            ✨ Keep up the great work!
-          </p>
-        </div>
+        ${keywordChanges.length > 0 ? `
+        <h3>Keyword Changes</h3>
+        <table style="width: 100%; border-collapse: collapse;">
+          <thead>
+            <tr style="background: #f8f9fa;">
+              <th style="padding: 12px; text-align: left; border: 1px solid #dee2e6;">Keyword</th>
+              <th style="padding: 12px; text-align: center; border: 1px solid #dee2e6;">Old Position</th>
+              <th style="padding: 12px; text-align: center; border: 1px solid #dee2e6;">New Position</th>
+              <th style="padding: 12px; text-align: center; border: 1px solid #dee2e6;">Change</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${keywordChanges.map(change => `
+              <tr>
+                <td style="padding: 12px; border: 1px solid #dee2e6;">${change.keyword}</td>
+                <td style="padding: 12px; text-align: center; border: 1px solid #dee2e6;">${change.oldPosition}</td>
+                <td style="padding: 12px; text-align: center; border: 1px solid #dee2e6;">${change.newPosition}</td>
+                <td style="padding: 12px; text-align: center; border: 1px solid #dee2e6;">
+                  <span style="color: ${change.change === 'improved' ? '#10B981' : '#EF4444'};">
+                    ${change.change === 'improved' ? '↗' : '↘'} ${Math.abs(change.newPosition - change.oldPosition)}
+                  </span>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+        ` : ''}
         
-        <div style="background: #333; color: white; padding: 10px; text-align: center; font-size: 12px;">
-          Rank Ranger - SEO Campaign Management
-        </div>
+        <p style="margin-top: 30px; color: #666; font-size: 14px;">
+          This is an automated notification from Rank Ranger.
+        </p>
       </div>
     `;
     
-    // WhatsApp message
-    let whatsappMessage = `🎉 *Milestone Achieved!*\n\n`;
-    whatsappMessage += `📊 *Campaign:* ${campaignName}\n`;
+    const text = `
+Ranking Update for ${campaignName}
+
+Summary:
+- Total Keywords: ${totalKeywords}
+- Improved: ${improvedCount}
+- Declined: ${declinedCount}
+
+${keywordChanges.length > 0 ? `
+Keyword Changes:
+${keywordChanges.map(change => 
+  `${change.keyword}: ${change.oldPosition} → ${change.newPosition} (${change.change === 'improved' ? '+' : '-'}${Math.abs(change.newPosition - change.oldPosition)})`
+).join('\n')}
+` : ''}
+
+This is an automated notification from Rank Ranger.
+    `;
     
-    if (keyword) {
-      whatsappMessage += `🔍 *Keyword:* ${keyword}\n`;
+    return { subject, html, text };
+  }
+  
+  static generateWhatsAppTemplate(data: {
+    campaignName: string;
+    totalKeywords: number;
+    improvedCount: number;
+    declinedCount: number;
+    topChanges: Array<{
+      keyword: string;
+      oldPosition: number;
+      newPosition: number;
+      change: 'improved' | 'declined';
+    }>;
+  }): string {
+    const { campaignName, totalKeywords, improvedCount, declinedCount, topChanges } = data;
+    
+    let message = `🔔 *Rank Update: ${campaignName}*\n\n`;
+    message += `📊 *Summary:*\n`;
+    message += `• Total Keywords: ${totalKeywords}\n`;
+    message += `• Improved: ${improvedCount} 📈\n`;
+    message += `• Declined: ${declinedCount} 📉\n\n`;
+    
+    if (topChanges.length > 0) {
+      message += `🔝 *Top Changes:*\n`;
+      topChanges.slice(0, 5).forEach(change => {
+        const emoji = change.change === 'improved' ? '📈' : '📉';
+        const changeValue = Math.abs(change.newPosition - change.oldPosition);
+        message += `${emoji} ${change.keyword}: ${change.oldPosition} → ${change.newPosition} (${change.change === 'improved' ? '+' : '-'}${changeValue})\n`;
+      });
     }
     
-    whatsappMessage += `🎯 *Achievement:* ${milestoneType}\n`;
-    whatsappMessage += `📈 *Value:* ${value}\n`;
-    whatsappMessage += `📅 *Date:* ${dateStr}\n`;
-    whatsappMessage += `\nCongratulations! We have reached the milestone for ${milestoneType} as of ${dateStr}.\n`;
-    whatsappMessage += `\n🔗 *View Dashboard:* ${dashboardUrl}`;
-    whatsappMessage += `\n\n✨ Keep up the great work!`;
+    message += `\n_Automated notification from Rank Ranger_`;
     
-    return {
-      subject,
-      emailBody,
-      whatsappMessage,
-    };
+    return message;
   }
+  
+  static generateMilestoneTemplate(
+    campaignName?: string,
+    milestoneType?: string,
+    value?: number | string,
+    keyword?: string,
+    date?: Date
+  ): { subject: string; html: string; text: string } {
+    const campaign = campaignName || 'Sample Campaign';
+    const milestone = milestoneType || 'position_improvement';
+    const val = value || 5;
+    const kw = keyword || 'sample keyword';
+    const dateStr = date ? date.toLocaleDateString() : new Date().toLocaleDateString();
+    
+    const subject = `Milestone Alert: ${campaign} - ${milestone}`;
+    
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #333;">Milestone Alert for ${campaign}</h2>
+        
+        <div style="background: #f5f5f5; padding: 20px; border-radius: 8px; margin: 20px 0;">
+          <h3 style="margin-top: 0;">Milestone Details</h3>
+          <p><strong>Type:</strong> ${milestone}</p>
+          <p><strong>Keyword:</strong> ${kw}</p>
+          <p><strong>Value:</strong> ${val}</p>
+          <p><strong>Date:</strong> ${dateStr}</p>
+        </div>
+        
+        <p style="margin-top: 30px; color: #666; font-size: 14px;">
+          This is an automated milestone notification from Rank Ranger.
+        </p>
+      </div>
+    `;
+    
+    const text = `
+Milestone Alert for ${campaign}
 
-  /**
-   * Generate template preview with sample data
-   */
-  static generateSampleTemplate(): NotificationTemplate {
+Milestone Details:
+- Type: ${milestone}
+- Keyword: ${kw}
+- Value: ${val}
+- Date: ${dateStr}
+
+This is an automated milestone notification from Rank Ranger.
+    `;
+    
+    return { subject, html, text };
+  }
+  
+  static generateSampleTemplate(): { subject: string; html: string; text: string } {
     return this.generateMilestoneTemplate(
-      'Sample SEO Campaign',
-      'Position 1',
-      1,
-      'best seo tools',
+      'Sample Campaign',
+      'Position Improvement',
+      5,
+      'sample keyword',
       new Date()
     );
   }
