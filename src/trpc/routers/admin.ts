@@ -51,7 +51,7 @@ export const adminRouter = router({
         const deletedKeywordMonthlyStats =
           await prisma.searchConsoleKeywordMonthlyStat.deleteMany({});
         console.log(
-          `Deleted ${deletedComputedMonthlyData.count} monthly keyword stat records`
+          `Deleted ${deletedKeywordMonthlyStats.count} monthly keyword stat records`
         );
 
         // 2. Delete all keyword daily stats (they reference keywords)
@@ -463,11 +463,14 @@ export const adminRouter = router({
         if (!preferences) {
           preferences = await prisma.adminNotificationPreferences.create({
             data: {
+              id: userId, // Add the required id field
+              userId, // Add the required userId field
               enableEmail: true,
               enableWhatsApp: true,
               enableAllNotifications: true,
               positionThresholds: JSON.stringify([1, 2, 3]),
-              clicksThreshold: 100,
+              clickThresholds: JSON.stringify([100]),
+              updatedAt: new Date(), // Add the required updatedAt field
             },
           });
         }
@@ -478,7 +481,9 @@ export const adminRouter = router({
           positionThresholds: preferences.positionThresholds 
             ? JSON.parse(preferences.positionThresholds) 
             : [1, 2, 3],
-          clicksThreshold: preferences.clicksThreshold,
+          clickThresholds: preferences.clickThresholds 
+            ? JSON.parse(preferences.clickThresholds) 
+            : [100],
         };
 
         return {
@@ -506,7 +511,7 @@ export const adminRouter = router({
         enableWhatsApp: z.boolean().optional(),
         enableAllNotifications: z.boolean().optional(),
         positionThresholds: z.array(z.number()).optional(),
-        clickThresholds: z.array(z.number()).optional(),
+        clickThresholds: z.array(z.number()).optional(), // Changed back to clickThresholds
         whatsAppGroupId: z.string().optional(),
         campaignId: z.string().optional(),
       })
@@ -519,7 +524,7 @@ export const adminRouter = router({
           enableWhatsApp,
           enableAllNotifications,
           positionThresholds,
-          clickThresholds,
+          clickThresholds, // Changed back to clickThresholds
           whatsAppGroupId,
           campaignId,
         } = input;
@@ -536,7 +541,7 @@ export const adminRouter = router({
           });
         }
 
-        const preferences = await (prisma as any)['adminNotificationPreferences'].upsert({
+        const preferences = await prisma.adminNotificationPreferences.upsert({
           where: { userId },
           update: {
             enableEmail: enableEmail ?? true,
@@ -548,15 +553,17 @@ export const adminRouter = router({
             campaignId: campaignId,
           },
           create: {
+            id: userId,
             userId,
             enableEmail: enableEmail ?? true,
             enableWhatsApp: enableWhatsApp ?? true,
             enableAllNotifications: enableAllNotifications ?? true,
             positionThresholds: JSON.stringify(positionThresholds || [1, 2, 3]),
-            clickThresholds: JSON.stringify(clickThresholds || [100, 500, 1000]),
+            clickThresholds: JSON.stringify(clickThresholds || [100]),
             whatsAppGroupId: whatsAppGroupId,
             campaignId: campaignId,
-          } as any,
+            updatedAt: new Date(),
+          },
         });
 
         // Parse JSON thresholds for response
@@ -565,7 +572,9 @@ export const adminRouter = router({
           positionThresholds: preferences.positionThresholds 
             ? JSON.parse(preferences.positionThresholds) 
             : [1, 2, 3],
-          clicksThreshold: preferences.clicksThreshold,
+          clickThresholds: preferences.clickThresholds 
+            ? JSON.parse(preferences.clickThresholds) 
+            : [100], // Changed to clickThresholds
         };
 
         return {

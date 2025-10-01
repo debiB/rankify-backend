@@ -2,14 +2,15 @@ import { z } from 'zod';
 import { router, publicProcedure, protectedProcedure } from '../context';
 import { PrismaClient } from '@prisma/client';
 import { hashPassword, comparePassword, generateToken } from '../../utils/auth';
+import type { AnyRouter } from '@trpc/server';
 
 const prisma = new PrismaClient();
 
-export const authRouter = router({
+export const authRouter: AnyRouter = router({
   register: publicProcedure
     .input(
       z.object({
-        email: z.email(),
+        email: z.string().email(),
         password: z.string().min(6),
         name: z.string().optional(),
       })
@@ -37,10 +38,6 @@ export const authRouter = router({
           id: true,
           email: true,
           name: true,
-          firstName: true,
-          lastName: true,
-          phoneNumber: true,
-          countryCode: true,
           role: true,
           status: true,
           hasChangedPassword: true,
@@ -85,10 +82,6 @@ export const authRouter = router({
           id: user.id,
           email: user.email,
           name: user.name,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          phoneNumber: user.phoneNumber,
-          countryCode: user.countryCode,
           role: user.role,
           status: user.status,
           hasChangedPassword: user.hasChangedPassword,
@@ -118,10 +111,6 @@ export const authRouter = router({
           id: true,
           email: true,
           name: true,
-          firstName: true,
-          lastName: true,
-          phoneNumber: true,
-          countryCode: true,
           role: true,
           status: true,
           hasChangedPassword: true,
@@ -139,10 +128,6 @@ export const authRouter = router({
         id: true,
         email: true,
         name: true,
-        firstName: true,
-        lastName: true,
-        phoneNumber: true,
-        countryCode: true,
         role: true,
         status: true,
         hasChangedPassword: true,
@@ -181,10 +166,6 @@ export const authRouter = router({
           id: true,
           email: true,
           name: true,
-          firstName: true,
-          lastName: true,
-          phoneNumber: true,
-          countryCode: true,
           role: true,
           status: true,
           hasChangedPassword: true,

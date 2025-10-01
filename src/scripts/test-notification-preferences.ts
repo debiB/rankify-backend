@@ -22,8 +22,8 @@ async function testNotificationPreferences() {
     const template = NotificationTemplateService.generateSampleTemplate();
     console.log('✅ Sample template generated:');
     console.log(`   Subject: ${template.subject}`);
-    console.log(`   Email body length: ${template.emailBody.length} characters`);
-    console.log(`   WhatsApp message length: ${template.whatsappMessage.length} characters`);
+    console.log(`   HTML length: ${template.html.length} characters`);
+    console.log(`   Text length: ${template.text.length} characters`);
 
     // 3. Test database models
     console.log('\n3. Testing database models...');
