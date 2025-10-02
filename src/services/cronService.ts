@@ -1,8 +1,11 @@
 import cron from 'node-cron';
 import { prisma } from '../utils/prisma';
 import { AnalyticsService } from './analytics';
+import { keywordCannibalizationService } from './keywordCannibalization';
+import { MilestoneService } from './milestoneService';
 
 const analyticsService = new AnalyticsService();
+const milestoneService = new MilestoneService();
 
 export class CronService {
   private static instance: CronService;
@@ -22,6 +25,8 @@ export class CronService {
   public initCronJobs(): void {
     this.setupMonthlyAnalyticsJob();
     this.setupDailyTrafficJob();
+    this.setupCannibalizationAuditJob();
+    this.setupDailyMilestoneCheckJob();
     console.log('✅ Cron jobs initialized');
   }
 
@@ -63,6 +68,119 @@ export class CronService {
     );
 
     console.log('📅 Daily traffic job scheduled: 6:00 AM UTC every day');
+  }
+
+  /**
+   * Setup keyword cannibalization audit job
+   * Runs daily at 4:00 AM UTC
+   */
+  private setupCannibalizationAuditJob(): void {
+    cron.schedule(
+      '0 4 * * *',
+      async () => {
+        console.log('🕐 Starting daily cannibalization audit job...');
+        await this.runCannibalizationAudits();
+      },
+      {
+        timezone: 'UTC',
+      }
+    );
+
+    console.log(
+      '📅 Cannibalization audit job scheduled: 4:00 AM UTC every day'
+    );
+  }
+
+  /**
+   * Setup daily milestone checking job
+   * Runs at 8:00 AM UTC every day (after daily traffic job)
+   */
+  private setupDailyMilestoneCheckJob(): void {
+    cron.schedule(
+      '0 8 * * *',
+      async () => {
+        console.log('🎯 Starting daily milestone check job...');
+        await this.checkMilestones();
+      },
+      {
+        timezone: 'UTC',
+      }
+    );
+
+    console.log(
+      '📅 Daily milestone check job scheduled: 8:00 AM UTC every day'
+    );
+  }
+
+  /**
+   * Run cannibalization audits for all active campaigns
+   */
+  private async runCannibalizationAudits(): Promise<void> {
+    try {
+      console.log(
+        '🔍 Running cannibalization audits for all active campaigns...'
+      );
+
+      // Get campaigns that need audits
+      const campaignsNeedingAudit =
+        await keywordCannibalizationService.getCampaignsNeedingAudit();
+
+      console.log(
+        `📊 Found ${campaignsNeedingAudit.length} campaigns needing cannibalization audit`
+      );
+
+      if (campaignsNeedingAudit.length === 0) {
+        console.log('ℹ️  No campaigns need cannibalization audit at this time');
+        return;
+      }
+
+      // Run audits for each campaign
+      const results = await Promise.allSettled(
+        campaignsNeedingAudit.map(async (campaignId: string) => {
+          console.log(
+            `🔄 Running cannibalization audit for campaign: ${campaignId}`
+          );
+
+          try {
+            const auditId =
+              await keywordCannibalizationService.runScheduledAudit(campaignId);
+
+            console.log(
+              `✅ Successfully completed cannibalization audit for campaign: ${campaignId} (Audit ID: ${auditId})`
+            );
+            return {
+              campaignId,
+              auditId,
+              success: true,
+            };
+          } catch (error) {
+            console.error(
+              `💥 Error running cannibalization audit for campaign ${campaignId}:`,
+              error
+            );
+            return {
+              campaignId,
+              success: false,
+              error,
+            };
+          }
+        })
+      );
+
+      // Log summary
+      const successful = results.filter(
+        (result: PromiseSettledResult<any>) =>
+          result.status === 'fulfilled' && (result as any).value.success
+      ).length;
+      const failed = results.length - successful;
+
+      console.log(`📈 Cannibalization audit job completed:`);
+      console.log(`   ✅ Successful: ${successful}`);
+      console.log(`   ❌ Failed: ${failed}`);
+      console.log(`   📊 Total campaigns processed: ${results.length}`);
+    } catch (error) {
+      console.error('💥 Error in cannibalization audit job:', error);
+    }
   }
 
   /**
@@ -162,7 +280,7 @@ export class CronService {
 
       // Log summary
       const successful = results.filter(
-        (result) => result.status === 'fulfilled' && result.value.success
+        (result: any) => result.status === 'fulfilled' && result.value.success
       ).length;
       const failed = results.length - successful;
 
@@ -273,7 +391,7 @@ export class CronService {
 
       // Log summary
       const successful = results.filter(
-        (result) => result.status === 'fulfilled' && result.value.success
+        (result: any) => result.status === 'fulfilled' && result.value.success
       ).length;
       const failed = results.length - successful;
 
@@ -283,6 +401,51 @@ export class CronService {
       console.log(`   📊 Total campaigns processed: ${results.length}`);
     } catch (error) {
       console.error('💥 Error in daily traffic job:', error);
+    }
+  }
+
+  /**
+   * Check milestones for all active campaigns
+   */
+  private async checkMilestones(): Promise<void> {
+    try {
+      console.log('🎯 Checking milestones for all active campaigns...');
+
+      const results = await milestoneService.checkAllCampaignMilestones();
+
+      // Log summary
+      const totalMilestones = results.reduce(
+        (sum, result) => sum + result.milestonesAchieved,
+        0
+      );
+      const totalNotifications = results.reduce(
+        (sum, result) => sum + result.notificationsSent,
+        0
+      );
+      const totalErrors = results.reduce(
+        (sum, result) => sum + result.errors.length,
+        0
+      );
+
+      console.log(`🎯 Milestone check job completed:`);
+      console.log(`   🎉 Total milestones achieved: ${totalMilestones}`);
+      console.log(`   📧 Total notifications sent: ${totalNotifications}`);
+      console.log(`   ❌ Total errors: ${totalErrors}`);
+      console.log(`   📊 Total campaigns processed: ${results.length}`);
+
+      // Log errors if any
+      if (totalErrors > 0) {
+        results.forEach((result) => {
+          if (result.errors.length > 0) {
+            console.error(
+              `❌ Errors for campaign ${result.campaignName}:`,
+              result.errors
+            );
+          }
+        });
+      }
+    } catch (error) {
+      console.error('💥 Error in milestone check job:', error);
     }
   }
 
@@ -303,6 +466,22 @@ export class CronService {
   }
 
   /**
+   * Manually trigger the cannibalization audit job (for testing)
+   */
+  public async triggerCannibalizationAudit(): Promise<void> {
+    console.log('🚀 Manually triggering cannibalization audit job...');
+    await this.runCannibalizationAudits();
+  }
+
+  /**
+   * Manually trigger the milestone check job (for testing)
+   */
+  public async triggerMilestoneCheck(): Promise<void> {
+    console.log('🚀 Manually triggering milestone check job...');
+    await this.checkMilestones();
+  }
+
+  /**
    * Get cron job status
    */
   public getCronStatus(): { initialized: boolean; jobs: string[] } {
@@ -311,6 +490,8 @@ export class CronService {
       jobs: [
         'Monthly Analytics Fetch - 0 2 1 * * (2:00 AM UTC on 1st of every month)',
         'Daily Traffic Fetch - 0 6 * * * (6:00 AM UTC every day)',
+        'Cannibalization Audit - 0 4 * * * (4:00 AM UTC every day)',
+        'Daily Milestone Check - 0 8 * * * (8:00 AM UTC every day)',
       ],
     };
   }

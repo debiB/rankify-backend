@@ -1,5 +1,8 @@
 import { initTRPC, TRPCError } from '@trpc/server';
 import { getUserFromToken } from '../utils/auth';
+import { PrismaClient } from '@prisma/client';
+
+const prisma = new PrismaClient();
 
 export interface Context {
   user?: {
@@ -11,6 +14,7 @@ export interface Context {
     hasChangedPassword: boolean;
     createdAt: Date;
   } | null;
+  prisma: PrismaClient;
 }
 
 export const createContext = async ({
@@ -22,17 +26,17 @@ export const createContext = async ({
 }): Promise<Context> => {
   // Handle case where req or req.headers might be undefined
   if (!req || !req.headers) {
-    return { user: null };
+    return { user: null, prisma };
   }
 
   const token = req.headers.authorization?.replace('Bearer ', '');
   if (!token) {
-    return { user: null };
+    return { user: null, prisma };
   }
 
   const user = await getUserFromToken(token);
   if (!user) {
-    return { user: null };
+    return { user: null, prisma };
   }
 
   return {
@@ -45,6 +49,7 @@ export const createContext = async ({
       hasChangedPassword: user.hasChangedPassword,
       createdAt: user.createdAt,
     },
+    prisma,
   };
 };
 
