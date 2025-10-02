@@ -4,7 +4,14 @@ import { adminProcedure, router } from '../context';
 import { prisma } from '../../utils/prisma';
 import { WhatsAppService } from '../../services/whatsappService';
 
-const whatsappService = new WhatsAppService();
+const getWhatsAppService = () => {
+  try {
+    return new WhatsAppService();
+  } catch (error) {
+    console.warn('WhatsApp service not available:', error);
+    return null;
+  }
+};
 
 export const whatsappRouter = router({
   // Get available WhatsApp groups from WHAPI
@@ -16,6 +23,15 @@ export const whatsappRouter = router({
         return {
           success: true,
           data: [],
+        };
+      }
+
+      const whatsappService = getWhatsAppService();
+      if (!whatsappService) {
+        return {
+          success: false,
+          data: [],
+          error: 'WhatsApp service unavailable',
         };
       }
 

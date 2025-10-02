@@ -661,6 +661,215 @@ export const adminRouter = router({
     }
   }),
 
+  // Get dashboard metrics for campaigns
+  getDashboardMetrics: adminProcedure
+    .input(
+      z.object({
+        campaignId: z.string().optional(),
+      })
+    )
+    .query(async ({ input }) => {
+      try {
+        const { campaignId } = input;
+
+        // If no campaign ID provided, get metrics for all campaigns
+        if (!campaignId) {
+          // Get all campaigns
+          const campaigns = await prisma.campaign.findMany({
+            include: {
+              user: true,
+            },
+          });
+
+          // Calculate metrics across all campaigns
+          let totalKeywords = 0;
+          let totalImproved = 0;
+          let totalDropped = 0;
+          let totalRankSum = 0;
+          let totalRankCount = 0;
+
+          for (const campaign of campaigns) {
+            // Get analytics data for this campaign
+            const analytics = await prisma.searchConsoleKeywordAnalytics.findFirst({
+              where: { siteUrl: campaign.searchConsoleSite },
+              include: {
+                keywords: {
+                  include: {
+                    dailyStats: {
+                      orderBy: { date: 'desc' },
+                    },
+                  },
+                },
+              },
+            });
+
+            if (analytics) {
+              totalKeywords += analytics.keywords.length;
+
+              for (const keyword of analytics.keywords) {
+                // Get the latest and previous daily stats for comparison
+                const sortedStats = [...keyword.dailyStats].sort(
+                  (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+                );
+                
+                const latestStat = sortedStats[0];
+                const previousStat = sortedStats[1];
+
+                if (latestStat && previousStat) {
+                  const latestRank = latestStat.averageRank || 0;
+                  const previousRank = previousStat.averageRank || 0;
+                  
+                  // Lower rank number means better position
+                  if (latestRank < previousRank) {
+                    totalImproved++;
+                  } else if (latestRank > previousRank) {
+                    totalDropped++;
+                  }
+                  
+                  if (latestRank > 0) {
+                    totalRankSum += latestRank;
+                    totalRankCount++;
+                  }
+                } else if (latestStat && latestStat.averageRank && latestStat.averageRank > 0) {
+                  // If we only have one data point, we can't determine improvement/decline
+                  totalRankSum += latestStat.averageRank;
+                  totalRankCount++;
+                }
+              }
+            }
+          }
+
+          const improvedPercentage = totalKeywords > 0 
+            ? Math.round((totalImproved / totalKeywords) * 100) 
+            : 0;
+            
+          const droppedPercentage = totalKeywords > 0 
+            ? Math.round((totalDropped / totalKeywords) * 100) 
+            : 0;
+            
+          const averageRank = totalRankCount > 0 
+            ? parseFloat((totalRankSum / totalRankCount).toFixed(2)) 
+            : 0;
+
+          return {
+            success: true,
+            data: {
+              totalKeywords,
+              improvedPercentage,
+              droppedPercentage,
+              averageRank,
+            },
+          };
+        } else {
+          // Get metrics for specific campaign
+          const campaign = await prisma.campaign.findUnique({
+            where: { id: campaignId },
+          });
+
+          if (!campaign) {
+            throw new TRPCError({
+              code: 'NOT_FOUND',
+              message: 'Campaign not found',
+            });
+          }
+
+          // Get analytics data for this campaign
+          const analytics = await prisma.searchConsoleKeywordAnalytics.findFirst({
+            where: { siteUrl: campaign.searchConsoleSite },
+            include: {
+              keywords: {
+                include: {
+                  dailyStats: {
+                    orderBy: { date: 'desc' },
+                  },
+                },
+              },
+            },
+          });
+
+          if (!analytics) {
+            return {
+              success: true,
+              data: {
+                totalKeywords: 0,
+                improvedPercentage: 0,
+                droppedPercentage: 0,
+                averageRank: 0,
+              },
+            };
+          }
+
+          const totalKeywords = analytics.keywords.length;
+          let totalImproved = 0;
+          let totalDropped = 0;
+          let totalRankSum = 0;
+          let totalRankCount = 0;
+
+          for (const keyword of analytics.keywords) {
+            // Get the latest and previous daily stats for comparison
+            const sortedStats = [...keyword.dailyStats].sort(
+              (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+            );
+            
+            const latestStat = sortedStats[0];
+            const previousStat = sortedStats[1];
+
+            if (latestStat && previousStat) {
+              const latestRank = latestStat.averageRank || 0;
+              const previousRank = previousStat.averageRank || 0;
+              
+              // Lower rank number means better position
+              if (latestRank < previousRank) {
+                totalImproved++;
+              } else if (latestRank > previousRank) {
+                totalDropped++;
+              }
+              
+              if (latestRank > 0) {
+                totalRankSum += latestRank;
+                totalRankCount++;
+              }
+            } else if (latestStat && latestStat.averageRank && latestStat.averageRank > 0) {
+              // If we only have one data point, we can't determine improvement/decline
+              totalRankSum += latestStat.averageRank;
+              totalRankCount++;
+            }
+          }
+
+          const improvedPercentage = totalKeywords > 0 
+            ? Math.round((totalImproved / totalKeywords) * 100) 
+            : 0;
+            
+          const droppedPercentage = totalKeywords > 0 
+            ? Math.round((totalDropped / totalKeywords) * 100) 
+            : 0;
+            
+          const averageRank = totalRankCount > 0 
+            ? parseFloat((totalRankSum / totalRankCount).toFixed(2)) 
+            : 0;
+
+          return {
+            success: true,
+            data: {
+              totalKeywords,
+              improvedPercentage,
+              droppedPercentage,
+              averageRank,
+            },
+          };
+        }
+      } catch (error) {
+        console.error('Error getting dashboard metrics:', error);
+        if (error instanceof TRPCError) {
+          throw error;
+        }
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to get dashboard metrics',
+        });
+      }
+    }),
+
   // Send test WhatsApp message
   sendTestWhatsApp: adminProcedure
     .input(

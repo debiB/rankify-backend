@@ -8,9 +8,8 @@ import { milestonesRouter } from './routers/milestones';
 import { whatsappRouter } from './routers/whatsapp';
 import { cannibalizationRouter } from './routers/cannibalization';
 import { settingsRouter } from './routers/settings';
-import { AnyRouter } from '@trpc/server';
 
-export const appRouter: AnyRouter = router({
+export const appRouter = router({
   auth: authRouter,
   users: usersRouter,
   googleAccounts: googleAccountsRouter,
