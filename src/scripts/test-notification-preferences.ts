@@ -22,8 +22,8 @@ async function testNotificationPreferences() {
     const template = NotificationTemplateService.generateSampleTemplate();
     console.log('✅ Sample template generated:');
     console.log(`   Subject: ${template.subject}`);
-    console.log(`   Email body length: ${template.emailBody.length} characters`);
-    console.log(`   WhatsApp message length: ${template.whatsappMessage.length} characters`);
+    console.log(`   HTML length: ${template.html.length} characters`);
+    console.log(`   Text length: ${template.text.length} characters`);
 
     // 3. Test database models
     console.log('\n3. Testing database models...');
@@ -37,7 +37,7 @@ async function testNotificationPreferences() {
       console.log(`✅ Admin user found: ${adminUser.email}`);
       
       // Test creating admin preferences
-      const adminPrefs = await prisma.adminNotificationPreferences.upsert({
+      const adminPrefs = await (prisma as any).adminNotificationPreferences.upsert({
         where: { userId: adminUser.id },
         update: {},
         create: {
@@ -59,17 +59,13 @@ async function testNotificationPreferences() {
     const campaigns = await prisma.campaign.findMany({
       take: 1,
       include: {
-        campaignGroups: {
-          include: {
-            whatsAppGroup: true,
-          },
-        },
-      },
+        campaignGroups: true,
+      } as any,
     });
 
     if (campaigns.length > 0) {
       console.log(`✅ Campaign found: ${campaigns[0].name}`);
-      console.log(`   WhatsApp groups associated: ${campaigns[0].campaignGroups.length}`);
+      console.log(`   WhatsApp groups associated: ${(campaigns[0] as any).campaignGroups.length}`);
     } else {
       console.log('⚠️ No campaigns found');
     }
@@ -79,26 +75,22 @@ async function testNotificationPreferences() {
     const users = await prisma.user.findMany({
       take: 1,
       include: {
-        emailPreferences: {
-          include: {
-            campaign: true,
-          },
-        },
-      },
+        emailPreferences: true,
+      } as any,
     });
 
     if (users.length > 0) {
       console.log(`✅ User found: ${users[0].email}`);
-      console.log(`   Email preferences: ${users[0].emailPreferences.length}`);
+      console.log(`   Email preferences: ${(users[0] as any).emailPreferences.length}`);
     } else {
       console.log('⚠️ No users found');
     }
 
     // 6. Test milestone types
     console.log('\n6. Testing milestone types...');
-    const milestoneTypes = await prisma.milestoneType.findMany();
+    const milestoneTypes = await (prisma as any).milestoneType.findMany();
     console.log(`✅ Milestone types found: ${milestoneTypes.length}`);
-    milestoneTypes.forEach(mt => {
+    milestoneTypes.forEach((mt: any) => {
       console.log(`   - ${mt.displayName} (${mt.type})`);
     });
 

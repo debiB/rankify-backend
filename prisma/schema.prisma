@@ -12,27 +12,23 @@ model User {
   email                        String                        @unique
   password                     String
   name                         String?
+  firstName                    String?
+  lastName                     String?
+  phoneNumber                  String?
+  countryCode                  String?                       @default("+972")
   role                         Role                          @default(USER)
   status                       Status                        @default(ACTIVE)
   createdAt                    DateTime                      @default(now())
   updatedAt                    DateTime                      @updatedAt
   hasChangedPassword           Boolean                       @default(false)
   adminNotificationPreferences AdminNotificationPreferences?
+  adminNotificationPreferencesGlobal AdminNotificationPreferencesGlobal?
   campaigns                    Campaign[]
   campaignUsers                CampaignUser[]
   emailPreferences             UserCampaignEmailPreference[]
   userNotificationPreferences  UserNotificationPreferences?
   favorites                    UserKeywordFavorite[]
-}
-
-enum Role {
-  ADMIN
-  USER
-}
-
-enum Status {
-  ACTIVE
-  INACTIVE
+  settings                     UserSettings?
 }
 
 model GoogleAccount {
@@ -93,6 +89,7 @@ model SearchConsoleKeyword {
   analytics       SearchConsoleKeywordAnalytics     @relation(fields: [analyticsId], references: [id], onDelete: Cascade)
   dailyStats      SearchConsoleKeywordDailyStat[]
   monthlyStats    SearchConsoleKeywordMonthlyStat[]
+  monthlyComputed SearchConsoleKeywordMonthlyComputed[]
   sentMilestones  SentMilestone[]
   favorites       UserKeywordFavorite[]
 
@@ -316,13 +313,13 @@ model AdminNotificationPreferencesGlobal {
 }
 
 model UserNotificationPreferences {
-  id                     String   @id
+  id                     String   @id @default(cuid())
   userId                 String   @unique
   enableEmail            Boolean  @default(true)
   enableWhatsApp         Boolean  @default(true)
   enableAllNotifications Boolean  @default(true)
   createdAt              DateTime @default(now())
-  updatedAt              DateTime
+  updatedAt              DateTime @updatedAt
   User                   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
@@ -436,4 +433,50 @@ model UserKeywordFavorite {
   @@unique([userId, keywordId])
   @@index([userId])
   @@index([keywordId])
+}
+
+// Monthly computed data for keywords (impressions, clicks, etc.)
+model SearchConsoleKeywordMonthlyComputed {
+  id                  String               @id @default(cuid())
+  keywordId           String
+  month               Int
+  year                Int
+  averageRank         Float
+  impressions         Int
+  clicks              Int
+  topRankingPageUrl   String               @db.Text
+  calcWindowDays      Int
+  computedAt          DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  keyword             SearchConsoleKeyword @relation(fields: [keywordId], references: [id], onDelete: Cascade)
+
+  @@unique([keywordId, month, year])
+  @@index([month, year])
+}
+
+// User settings preferences
+model UserSettings {
+  id                    String   @id @default(cuid())
+  userId                String   @unique
+  enableNotifications   Boolean  @default(true)
+  notificationSound     Boolean  @default(true)
+  doNotDisturbMode      Boolean  @default(false)
+  emailNotifications    Boolean  @default(true)
+  systemLanguage        String   @default("en")
+  systemTheme           String   @default("dark")
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_settings")
+}
+
+enum Role {
+  ADMIN
+  USER
+}
+
+enum Status {
+  ACTIVE
+  INACTIVE
 }

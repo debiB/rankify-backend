@@ -7,6 +7,7 @@ import { adminRouter } from './routers/admin';
 import { milestonesRouter } from './routers/milestones';
 import { whatsappRouter } from './routers/whatsapp';
 import { cannibalizationRouter } from './routers/cannibalization';
+import { settingsRouter } from './routers/settings';
 
 export const appRouter = router({
   auth: authRouter,
@@ -17,6 +18,7 @@ export const appRouter = router({
   milestones: milestonesRouter,
   whatsapp: whatsappRouter,
   cannibalization: cannibalizationRouter,
+  settings: settingsRouter,
 });
 
 export type AppRouter = typeof appRouter;

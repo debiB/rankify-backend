@@ -1,6 +1,7 @@
 import { z } from 'zod';
-import { router, protectedProcedure, adminProcedure } from '../context';
+import { router, adminProcedure } from '../context';
 import { keywordCannibalizationService } from '../../services/keywordCannibalization';
+import { inferRouterOutputs } from '@trpc/server';
 
 export const cannibalizationRouter = router({
   /**
@@ -72,7 +73,7 @@ export const cannibalizationRouter = router({
     )
     .query(async ({ input, ctx }) => {
       // Get the latest audit for the campaign
-      const latestAudit = await ctx.prisma.keywordCannibalizationAudit.findFirst({
+      const latestAudit = await (ctx.prisma as any).keywordCannibalizationAudit.findFirst({
         where: {
           campaignId: input.campaignId,
           status: 'COMPLETED',
@@ -105,7 +106,7 @@ export const cannibalizationRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
-      const latestAudit = await ctx.prisma.keywordCannibalizationAudit.findFirst({
+      const latestAudit = await (ctx.prisma as any).keywordCannibalizationAudit.findFirst({
         where: {
           campaignId: input.campaignId,
           status: 'COMPLETED',
@@ -175,7 +176,7 @@ export const cannibalizationRouter = router({
         totalKeywords: latestAudit.totalKeywords,
         keywordsWithCannibalization: cannibalizationByKeyword,
         cannibalizationRate:
-          latestAudit.totalKeywords > 0
+          latestAudit.totalKeywords && latestAudit.totalKeywords > 0
             ? (cannibalizationByKeyword / latestAudit.totalKeywords) * 100
             : 0,
         totalCompetingPages,
@@ -196,7 +197,7 @@ export const cannibalizationRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
-      const latestAudit = await ctx.prisma.keywordCannibalizationAudit.findFirst({
+      const latestAudit = await (ctx.prisma as any).keywordCannibalizationAudit.findFirst({
         where: {
           campaignId: input.campaignId,
           status: 'COMPLETED',
