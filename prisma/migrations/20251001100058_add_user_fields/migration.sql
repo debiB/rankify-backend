@@ -51,7 +51,7 @@ CREATE TABLE `user_settings` (
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- AddForeignKey
-ALTER TABLE `CampaignUser` ADD CONSTRAINT `CampaignUser_campaignId_fkey` FOREIGN KEY (`campaignId`) REFERENCES `Campaign`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+-- ALTER TABLE `CampaignUser` ADD CONSTRAINT `CampaignUser_campaignId_fkey` FOREIGN KEY (`campaignId`) REFERENCES `Campaign`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE `AdminNotificationPreferencesGlobal` ADD CONSTRAINT `AdminNotificationPreferencesGlobal_userId_fkey` FOREIGN KEY (`userId`) REFERENCES `User`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
