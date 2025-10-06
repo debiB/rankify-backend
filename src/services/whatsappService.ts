@@ -15,23 +15,24 @@ export interface SendMessageResponse {
 
 export class WhatsAppService {
   private readonly apiUrl = 'https://gate.whapi.cloud';
-  private readonly token: string;
+  private readonly token: string | undefined;
 
   constructor() {
-    this.token = process.env.WHAPI_TOKEN || '';
-    if (!this.token) {
-      throw new Error('WHAPI_TOKEN environment variable is required');
-    }
+    this.token = process.env.WHAPI_TOKEN || undefined;
   }
 
   /**
    * Get all WhatsApp groups from Whapi API
    */
   async getGroups(): Promise<WhatsAppGroup[]> {
+    if (!this.token || this.token.startsWith('your_')) {
+      // Gracefully handle missing token by returning empty list
+      return [];
+    }
     try {
       const response = await axios.get(`${this.apiUrl}/groups`, {
         headers: {
-          'Authorization': `Bearer ${this.token}`,
+          Authorization: `Bearer ${this.token}`,
           'Content-Type': 'application/json',
         },
       });
@@ -55,7 +56,16 @@ export class WhatsAppService {
   /**
    * Send a text message to a WhatsApp group
    */
-  async sendMessage(groupId: string, message: string): Promise<SendMessageResponse> {
+  async sendMessage(
+    groupId: string,
+    message: string
+  ): Promise<SendMessageResponse> {
+    if (!this.token || this.token.startsWith('your_')) {
+      return {
+        success: false,
+        error: 'WHAPI_TOKEN not configured',
+      };
+    }
     try {
       const response = await axios.post(
         `${this.apiUrl}/messages/text`,
@@ -65,7 +75,7 @@ export class WhatsAppService {
         },
         {
           headers: {
-            'Authorization': `Bearer ${this.token}`,
+            Authorization: `Bearer ${this.token}`,
             'Content-Type': 'application/json',
           },
         }
@@ -86,7 +96,10 @@ export class WhatsAppService {
       console.error('Error sending WhatsApp message:', error);
       return {
         success: false,
-        error: error.response?.data?.message || error.message || 'Failed to send message',
+        error:
+          error.response?.data?.message ||
+          error.message ||
+          'Failed to send message',
       };
     }
   }
@@ -95,9 +108,12 @@ export class WhatsAppService {
    * Validate if a group ID exists and is accessible
    */
   async validateGroup(groupId: string): Promise<boolean> {
+    if (!this.token || this.token.startsWith('your_')) {
+      return false;
+    }
     try {
       const groups = await this.getGroups();
-      return groups.some(group => group.id === groupId);
+      return groups.some((group) => group.id === groupId);
     } catch (error) {
       console.error('Error validating WhatsApp group:', error);
       return false;
@@ -115,25 +131,27 @@ export class WhatsAppService {
     dashboardUrl?: string,
     achievedDate?: Date
   ): string {
-    const dateStr = achievedDate ? achievedDate.toLocaleDateString() : new Date().toLocaleDateString();
-    
+    const dateStr = achievedDate
+      ? achievedDate.toLocaleDateString()
+      : new Date().toLocaleDateString();
+
     let message = `🎉 *Milestone Achieved!*\n\n`;
     message += `📊 *Campaign:* ${campaignName}\n`;
-    
+
     if (keyword) {
       message += `🔍 *Keyword:* ${keyword}\n`;
     }
-    
+
     message += `🎯 *Achievement:* ${milestoneType}\n`;
     message += `📈 *Value:* ${milestoneValue}\n`;
     message += `📅 *Date:* ${dateStr}\n`;
-    
+
     if (dashboardUrl) {
       message += `\n🔗 *View Dashboard:* ${dashboardUrl}`;
     }
-    
+
     message += `\n\n✨ Keep up the great work!`;
-    
+
     return message;
   }
 }
