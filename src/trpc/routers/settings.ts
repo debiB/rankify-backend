@@ -1,8 +1,8 @@
 import { z } from 'zod';
-import { router, protectedProcedure } from '../context';
+import { router, protectedProcedure } from '../trpc-context';
 import { TRPCError } from '@trpc/server';
 import { PrismaClient } from '@prisma/client';
-import type { Context } from '../context';
+import type { TRPCContext } from '../trpc-context';
 
 const prisma = new PrismaClient();
 

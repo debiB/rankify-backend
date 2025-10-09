@@ -7,6 +7,53 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum Role {
+  USER
+  ADMIN
+}
+
+enum Status {
+  ACTIVE
+  INACTIVE
+}
+
+// User settings model
+model UserSettings {
+  id                     String   @id @default(cuid())
+  userId                 String   @unique
+  enableNotifications    Boolean  @default(true)
+  notificationSound      Boolean  @default(true)
+  doNotDisturbMode       Boolean  @default(false)
+  emailNotifications     Boolean  @default(true)
+  systemLanguage         String   @default("en")
+  systemTheme            String   @default("dark")
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+  
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// Computed monthly keyword data for performance calculations
+model SearchConsoleKeywordMonthlyComputed {
+  id                String               @id @default(cuid())
+  keywordId         String
+  month             Int
+  year              Int
+  averageRank       Float
+  searchVolume      Int
+  impressions       Int
+  clicks            Int
+  ctr               Float
+  topRankingPageUrl String               @db.Text
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  keyword           SearchConsoleKeyword @relation(fields: [keywordId], references: [id], onDelete: Cascade)
+
+  @@unique([keywordId, month, year])
+  @@index([month, year])
+  @@index([keywordId])
+}
+
 model User {
   id                           String                        @id @default(cuid())
   email                        String                        @unique
@@ -167,11 +214,34 @@ model SearchConsoleTrafficDaily {
   createdAt   DateTime                      @default(now())
   updatedAt   DateTime                      @updatedAt
   ctr         Float
-  position    Float
+  position    Float?
+
   analytics   SearchConsoleTrafficAnalytics @relation(fields: [analyticsId], references: [id], onDelete: Cascade)
 
   @@unique([analyticsId, date])
   @@index([date])
+}
+
+// Keyword Analysis model for storing SEO analysis results
+model KeywordAnalysis {
+  id                     String       @id @default(cuid())
+  keyword                String
+  pageGoals              Json
+  h1Headlines            Json
+  h2Headlines            Json
+  h3Headlines            Json
+  avgWordCount           Int
+  keywordDensity         Float
+  suggestedQA            Json
+  recommendedExternalLink String?
+  analysisDate           DateTime     @default(now())
+  createdAt              DateTime     @default(now())
+  updatedAt              DateTime     @updatedAt
+
+  contentPlans           ContentPlan[]
+
+  @@index([keyword])
+  @@index([analysisDate])
 }
 
 model AdminNotificationPreferences {
@@ -433,4 +503,86 @@ model UserKeywordFavorite {
   @@unique([userId, keywordId])
   @@index([userId])
   @@index([keywordId])
+}
+
+// Brand Profile models for content generation
+model BrandProfile {
+  id        String   @id @default(cuid())
+  name      String
+  toneData  Json?
+  lastUpdated DateTime // Match the database column name
+  createdAt DateTime @default(now())
+
+  urls      BrandProfileUrl[]
+  pdfs      BrandProfilePdf[]
+  otherDocs BrandProfileOtherDoc[]
+}
+
+model BrandProfileUrl {
+  id             String @id @default(cuid())
+  brandProfileId String
+  url            String @db.Text
+
+  brandProfile BrandProfile @relation(fields: [brandProfileId], references: [id], onDelete: Cascade)
+
+  @@index([brandProfileId])
+}
+
+model BrandProfilePdf {
+  id             String @id @default(cuid())
+  brandProfileId String
+  url            String @db.Text
+
+  brandProfile BrandProfile @relation(fields: [brandProfileId], references: [id], onDelete: Cascade)
+
+  @@index([brandProfileId])
+}
+
+model BrandProfileOtherDoc {
+  id             String @id @default(cuid())
+  brandProfileId String
+  url            String @db.Text
+
+  brandProfile BrandProfile @relation(fields: [brandProfileId], references: [id], onDelete: Cascade)
+
+  @@index([brandProfileId])
+}
+
+// Content planning and generation models
+
+model ContentPlan {
+  id                   String @id @default(cuid())
+  keywordAnalysisId    String
+  articleGoal          String @db.Text
+  headlines            Json // JSON array of strings
+  subheadings          Json // JSON array of strings
+  recommendedWordCount Int
+  keywordPlacement     Json // JSON array of strings
+  style                String
+  adminApproved        Boolean @default(false)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  keywordAnalysis    KeywordAnalysis    @relation(fields: [keywordAnalysisId], references: [id], onDelete: Cascade)
+  generatedContents GeneratedContent[]
+
+  @@index([keywordAnalysisId])
+}
+
+model GeneratedContent {
+  id             String @id @default(cuid())
+  contentPlanId  String
+  articleText    String? @db.LongText // Temporary - will be removed after migration
+  articleContent Json? // JSON array of ContentBlock objects
+  style          String @db.Text
+  intro          String @db.Text
+  qnaSections    Json // JSON array of strings
+  externalLink   String? @db.Text
+  finalized      Boolean @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  contentPlan ContentPlan @relation(fields: [contentPlanId], references: [id], onDelete: Cascade)
+
+  @@index([contentPlanId])
 }

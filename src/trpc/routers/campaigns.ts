@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
-import { protectedProcedure, adminProcedure, router } from '../context';
+import { protectedProcedure, adminProcedure, router } from '../trpc-context';
 import { prisma } from '../../utils/prisma';
 import { AnalyticsService } from '../../services/analytics';
 import { keywordCannibalizationService } from '../../services/keywordCannibalization';
@@ -2556,7 +2556,7 @@ export const campaignsRouter = router({
             0
           );
           const totalPosition = currentMonthDailyRecords.reduce(
-            (sum, day) => sum + day.position,
+            (sum, day) => sum + (day.position || 0),
             0
           );
 

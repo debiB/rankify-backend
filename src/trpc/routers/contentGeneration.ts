@@ -1,11 +1,11 @@
-import { router, publicProcedure } from '../context';
+import { router, publicProcedure } from '../trpc-context';
 import { contentGenerationService } from '../../services/contentGenerationService';
 import { contentReviewService, ReviewResult } from '../../services/contentReviewService';
 import { z } from 'zod';
-import type { AnyRouter } from '@trpc/server';
-import type { GeneratedContent, GeneratedContentData, ContentStyle } from '../../services/contentGenerationService';
+import type { GeneratedContent, GeneratedContentData, ContentStyle, ContentBlock } from '../../services/contentGenerationService';
+import type { inferRouterOutputs } from '@trpc/server';
 
-export const contentGenerationRouter: AnyRouter = router({
+export const contentGenerationRouter = router({
   /**
    * Generate article content using Gemini API
    * POST /content/generate
@@ -14,14 +14,16 @@ export const contentGenerationRouter: AnyRouter = router({
     .input(z.object({
       contentPlanId: z.string().min(1, 'Content plan ID is required'),
       brandProfileId: z.string().min(1, 'Brand profile ID is required'),
-      style: z.enum(['מאמר', 'יח״צ', 'בקלינק'])
+      style: z.enum(['מאמר', 'יח״צ', 'בקלינק']),
+      language: z.string().optional().default('he') // Add language parameter
     }))
     .mutation(async ({ input }) => {
       try {
         const generatedContentId = await contentGenerationService.generateContent(
           input.contentPlanId,
           input.brandProfileId,
-          input.style
+          input.style,
+          input.language // Pass language to the service
         );
         
         return {
@@ -45,42 +47,65 @@ export const contentGenerationRouter: AnyRouter = router({
     }))
     .query(async ({ input }) => {
       try {
-        const generatedContent = await contentGenerationService.getGeneratedContentById(input.id);
-        
+        const content = await contentGenerationService.getGeneratedContentById(input.id);
         return {
           success: true,
-          data: generatedContent
+          data: content
         };
       } catch (error) {
-        console.error('Error in getGeneratedContentById procedure:', error);
-        throw new Error(error instanceof Error ? error.message : 'Failed to retrieve generated content');
+        console.error('Error retrieving generated content:', error);
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'Failed to retrieve content'
+        };
       }
     }),
-    
+
   /**
-   * Review article for SEO and readability
-   * POST /content/review/:id
+   * Update generated content
+   * PUT /content/:id
    */
-  review: publicProcedure
+  update: publicProcedure
     .input(z.object({
-      id: z.string().min(1, 'Generated content ID is required')
+      id: z.string().min(1, 'Generated content ID is required'),
+      updates: z.object({
+        articleContent: z.array(z.object({
+          heading_type: z.enum(['H1', 'H2', 'H3']),
+          heading_text: z.string(),
+          body_text: z.string()
+        })).optional(),
+        style: z.string().optional(),
+        intro: z.string().optional(),
+        qnaSections: z.array(z.string()).optional(),
+        externalLink: z.string().nullable().optional(),
+        finalized: z.boolean().optional()
+      }).partial()
     }))
-    .query(async ({ input }) => {
+    .mutation(async ({ input }) => {
       try {
-        const reviewResult: ReviewResult = await contentReviewService.reviewContent(input.id);
+        // Convert qnaSections to JSON string if provided
+        const updatesToApply = { ...input.updates };
+        if (updatesToApply.qnaSections) {
+          updatesToApply.qnaSections = JSON.stringify(updatesToApply.qnaSections) as any;
+        }
+        
+        const updatedContent = await contentGenerationService.update(
+          input.id,
+          updatesToApply
+        );
         
         return {
           success: true,
-          data: reviewResult
+          data: updatedContent
         };
       } catch (error) {
-        console.error('Error in reviewContent procedure:', error);
-        throw new Error(error instanceof Error ? error.message : 'Failed to review content');
+        console.error('Error updating generated content:', error);
+        throw new Error(error instanceof Error ? error.message : 'Failed to update content');
       }
     }),
-    
+
   /**
-   * Finalize generated content
+   * Finalize generated content (mark as complete)
    * PUT /content/:id/finalize
    */
   finalize: publicProcedure
@@ -90,50 +115,37 @@ export const contentGenerationRouter: AnyRouter = router({
     .mutation(async ({ input }) => {
       try {
         const finalizedContent = await contentGenerationService.finalizeContent(input.id);
-        
         return {
           success: true,
-          data: finalizedContent,
-          message: 'Content finalized successfully'
+          data: finalizedContent
         };
       } catch (error) {
-        console.error('Error in finalizeContent procedure:', error);
+        console.error('Error finalizing content:', error);
         throw new Error(error instanceof Error ? error.message : 'Failed to finalize content');
       }
     }),
-    
+
   /**
-   * Update generated content
-   * PUT /content/:id
+   * Review generated content for quality metrics
+   * GET /content/:id/review
    */
-  update: publicProcedure
+  review: publicProcedure
     .input(z.object({
-      id: z.string().min(1, 'Generated content ID is required'),
-      updates: z.object({
-        articleText: z.string().optional(),
-        style: z.string().optional(),
-        intro: z.string().optional(),
-        qnaSections: z.array(z.string()).optional(),
-        externalLink: z.string().nullable().optional()
-      }).optional()
+      id: z.string().min(1, 'Generated content ID is required')
     }))
-    .mutation(async ({ input }) => {
+    .query(async ({ input }) => {
       try {
-        const updates = input.updates || {};
-        
-        const updatedContent = await contentGenerationService.updateGeneratedContent(
-          input.id,
-          updates
-        );
-        
+        const reviewResult: ReviewResult = await contentReviewService.review(input.id);
         return {
           success: true,
-          data: updatedContent,
-          message: 'Content updated successfully'
+          data: reviewResult
         };
       } catch (error) {
-        console.error('Error in updateGeneratedContent procedure:', error);
-        throw new Error(error instanceof Error ? error.message : 'Failed to update generated content');
+        console.error('Error reviewing content:', error);
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'Failed to review content'
+        };
       }
     })
 });

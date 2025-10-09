@@ -1,13 +1,8 @@
-import { PrismaClient } from '@prisma/client';
 import { prisma } from '../utils/prisma';
 import { geminiService, ToneData } from './geminiService';
-import { BrandProfile, BrandProfileUrl, BrandProfilePdf, BrandProfileOtherDoc } from '@prisma/client';
 import axios from 'axios';
-import pdfParse from 'pdf-parse';
-import * as fs from 'fs';
-import * as path from 'path';
+import * as pdfParse from 'pdf-parse';
 import * as cheerio from 'cheerio';
-
 
 export interface CreateBrandProfileInput {
   name: string;
@@ -20,6 +15,16 @@ export interface UpdateBrandProfileInput {
   id: string;
   name?: string;
   toneData?: ToneData;
+  urls?: string[];
+  pdfs?: string[];
+  otherDocs?: string[];
+}
+
+export interface ResourceAnalysis {
+  url?: string;
+  type: 'url' | 'pdf' | 'document';
+  content: string;
+  toneData: ToneData;
 }
 
 export class BrandService {
@@ -35,6 +40,8 @@ export class BrandService {
       data: {
         name: input.name,
         toneData: toneData as any,
+        lastUpdated: new Date(),
+        createdAt: new Date(),
         urls: {
           create: input.urls.map(url => ({ url }))
         },
@@ -44,7 +51,7 @@ export class BrandService {
         otherDocs: {
           create: input.otherDocs.map(doc => ({ url: doc }))
         }
-      },
+      } as any,
       include: {
         urls: true,
         pdfs: true,
@@ -70,6 +77,42 @@ export class BrandService {
   }
 
   /**
+   * Get all brand profiles
+   */
+  async getAllBrandProfiles() {
+    return await prisma.brandProfile.findMany({
+      include: {
+        urls: true,
+        pdfs: true,
+        otherDocs: true
+      }
+    });
+  }
+
+  /**
+   * Get detailed analysis results for a brand profile
+   */
+  async getDetailedBrandAnalysis(id: string) {
+    const brandProfile = await this.getBrandProfile(id);
+    
+    if (!brandProfile) {
+      throw new Error('Brand profile not found');
+    }
+    
+    // Get individual resource analyses
+    const individualAnalyses = await this.analyzeIndividualResources(
+      brandProfile.urls.map(url => url.url),
+      brandProfile.pdfs.map(pdf => pdf.url),
+      brandProfile.otherDocs.map(doc => doc.url)
+    );
+    
+    return {
+      brandProfile,
+      individualAnalyses
+    };
+  }
+
+  /**
    * Update a brand profile
    */
   async updateBrandProfile(input: UpdateBrandProfileInput) {
@@ -83,6 +126,43 @@ export class BrandService {
       data.toneData = input.toneData as any;
     }
     
+    // Always update the lastUpdated field
+    data.lastUpdated = new Date();
+    
+    // Update associated resources if provided
+    if (input.urls) {
+      // Remove existing URLs and add new ones
+      await prisma.brandProfileUrl.deleteMany({
+        where: { brandProfileId: input.id }
+      });
+      
+      data.urls = {
+        create: input.urls.map(url => ({ url }))
+      };
+    }
+    
+    if (input.pdfs) {
+      // Remove existing PDFs and add new ones
+      await prisma.brandProfilePdf.deleteMany({
+        where: { brandProfileId: input.id }
+      });
+      
+      data.pdfs = {
+        create: input.pdfs.map(pdf => ({ url: pdf }))
+      };
+    }
+    
+    if (input.otherDocs) {
+      // Remove existing documents and add new ones
+      await prisma.brandProfileOtherDoc.deleteMany({
+        where: { brandProfileId: input.id }
+      });
+      
+      data.otherDocs = {
+        create: input.otherDocs.map(doc => ({ url: doc }))
+      };
+    }
+    
     return await prisma.brandProfile.update({
       where: { id: input.id },
       data,
@@ -92,6 +172,104 @@ export class BrandService {
         otherDocs: true
       }
     });
+  }
+
+  /**
+   * Re-analyze all brand resources to update the tone data
+   */
+  async reanalyzeBrandProfile(id: string) {
+    const brandProfile = await this.getBrandProfile(id);
+    
+    if (!brandProfile) {
+      throw new Error('Brand profile not found');
+    }
+    
+    // Extract URLs, PDFs, and other documents from the brand profile
+    const urls = brandProfile.urls.map(url => url.url);
+    const pdfs = brandProfile.pdfs.map(pdf => pdf.url);
+    const otherDocs = brandProfile.otherDocs.map(doc => doc.url);
+    
+    // Analyze all resources
+    const toneData = await this.analyzeBrandResources(urls, pdfs, otherDocs);
+    
+    // Update the brand profile with new tone data
+    return await prisma.brandProfile.update({
+      where: { id },
+      data: {
+        toneData: toneData as any,
+        lastUpdated: new Date()
+      } as any,
+      include: {
+        urls: true,
+        pdfs: true,
+        otherDocs: true
+      }
+    });
+  }
+
+  /**
+   * Analyze individual resources and return detailed analysis
+   */
+  async analyzeIndividualResources(urls: string[], pdfs: string[], otherDocs: string[]): Promise<ResourceAnalysis[]> {
+    const analyses: ResourceAnalysis[] = [];
+    
+    // Process URLs
+    for (const url of urls) {
+      try {
+        const analysis = await geminiService.analyzeBrandFromUrl(url);
+        analyses.push({
+          url,
+          type: 'url',
+          content: analysis.rawResponse,
+          toneData: analysis.toneData
+        });
+      } catch (error) {
+        console.error(`Error analyzing URL ${url}:`, error);
+        // Continue with other URLs even if one fails
+      }
+    }
+    
+    // Process PDF documents
+    for (const pdfUrl of pdfs) {
+      try {
+        const pdfContent = await this.extractTextFromPdf(pdfUrl);
+        if (pdfContent) {
+          // Analyze the PDF content with Gemini
+          const analysis = await geminiService.analyzeBrandContent(pdfContent);
+          analyses.push({
+            url: pdfUrl,
+            type: 'pdf',
+            content: analysis.rawResponse,
+            toneData: analysis.toneData
+          });
+        }
+      } catch (error) {
+        console.error(`Error processing PDF ${pdfUrl}:`, error);
+        // Continue with other documents even if one fails
+      }
+    }
+    
+    // Process other documents (assuming they are text files or similar)
+    for (const docUrl of otherDocs) {
+      try {
+        const docContent = await this.extractTextFromDocument(docUrl);
+        if (docContent) {
+          // Analyze the document content with Gemini
+          const analysis = await geminiService.analyzeBrandContent(docContent);
+          analyses.push({
+            url: docUrl,
+            type: 'document',
+            content: analysis.rawResponse,
+            toneData: analysis.toneData
+          });
+        }
+      } catch (error) {
+        console.error(`Error processing document ${docUrl}:`, error);
+        // Continue with other documents even if one fails
+      }
+    }
+    
+    return analyses;
   }
 
   /**
@@ -161,7 +339,11 @@ export class BrandService {
         subheadingStyle: 'standard'
       },
       keywords: [],
-      summary: 'No content analyzed yet.'
+      summary: 'No content analyzed yet.',
+      brandVoiceCharacteristics: [],
+      targetAudienceInsights: [],
+      valueProposition: '',
+      communicationPrinciples: []
     };
   }
   
@@ -177,7 +359,7 @@ export class BrandService {
       });
       
       // Parse the PDF
-      const data = await pdfParse(response.data);
+      const data = await (pdfParse as any).default(response.data);
       
       // Extract and clean text
       let text = data.text.replace(/\s+/g, ' ').trim();

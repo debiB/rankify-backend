@@ -5,7 +5,7 @@ import morgan from 'morgan';
 import dotenv from 'dotenv';
 import { createExpressMiddleware } from '@trpc/server/adapters/express';
 import { appRouter } from './trpc/router';
-import { createContext } from './trpc/context';
+import { createContext } from './trpc/trpc-context';
 import { initializeAdmin } from './utils/adminInit';
 import { verifySMTPConnection } from './utils/email';
 import oauthRoutes from './routes/oauth';

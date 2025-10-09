@@ -1,9 +1,9 @@
 import { z } from 'zod';
-import { router, adminProcedure } from '../context';
+import { router, adminProcedure } from '../trpc-context';
 import { keywordCannibalizationService } from '../../services/keywordCannibalization';
 import { inferRouterOutputs } from '@trpc/server';
 
-export const cannibalizationRouter = router({
+export const keywordCannibalizationRouter = router({
   /**
    * Run audit with custom date range
    */

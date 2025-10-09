@@ -4,7 +4,7 @@ import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
-export interface Context {
+export interface TRPCContext {
   user?: {
     id: string;
     email: string;
@@ -23,7 +23,7 @@ export const createContext = async ({
 }: {
   req: any;
   res: any;
-}): Promise<Context> => {
+}): Promise<TRPCContext> => {
   // Handle case where req or req.headers might be undefined
   if (!req || !req.headers) {
     return { user: null, prisma };
@@ -53,7 +53,7 @@ export const createContext = async ({
   };
 };
 
-const t = initTRPC.context<Context>().create();
+const t = initTRPC.context<TRPCContext>().create();
 
 export const router = t.router;
 export const publicProcedure = t.procedure;

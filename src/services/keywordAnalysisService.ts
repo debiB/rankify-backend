@@ -335,55 +335,55 @@ export class KeywordAnalysisService {
   private async analyzeWithGemini(keyword: string, pageContents: PageContent[]): Promise<KeywordAnalysisResult> {
     try {
       // Combine all page contents for analysis
-      const combinedContent = pageContents.map(page => 
-        `URL: ${page.url}\nContent: ${page.content}`
+      const combinedContent = pageContents.map((page, index) => 
+        `Page ${index + 1}:\nURL: ${page.url}\nContent: ${page.content}`
       ).join('\n\n');
       
       // Create prompt for Gemini analysis
       const prompt = `
-        Analyze the following web pages and provide content analysis for the keyword: "${keyword}"
+        Act as an SEO expert. Analyze the following web pages and provide content analysis for the keyword: "${keyword}"
         
         Pages:
         ${combinedContent}
         
-        Please provide your analysis in the following format:
+        Please provide your analysis in the EXACT format below. Do not include any additional text:
         
         Page Goals:
-        - List the primary purpose of each page's content
+        - The primary purpose of the first page's content
+        - The primary purpose of the second page's content
+        - The primary purpose of the third page's content
+        - The primary purpose of the fourth page's content
+        - The primary purpose of the fifth page's content
         
         Headings:
         H1:
-        - Extract all H1 headings from the pages
+        - First H1 heading found
+        - Second H1 heading found
+        
         H2:
-        - Extract all H2 headings from the pages
+        - First H2 heading found
+        - Second H2 heading found
+        
         H3:
-        - Extract all H3 headings from the pages
+        - First H3 heading found
+        - Second H3 heading found
         
         Average Word Count:
-        - Calculate the average word count across all pages (number only)
+        1000
         
         Keyword Density:
-        - Calculate the density of the keyword "${keyword}" as a percentage (number only, e.g., 2.5)
+        2.5
         
         Suggested Q&A:
-        - Provide 5-10 suggested questions and answers that would enhance the content
+        - First suggested question and answer
+        - Second suggested question and answer
         
         Recommended External Link:
-        - Suggest one authoritative external link that would add value (provide full URL)
-        
-        SEO Rules Compliance:
-        - Confirm the keyword appears in H1
-        - Confirm the keyword appears in at least one H2
-        - Confirm the keyword appears in the first paragraph
-        - Confirm the keyword appears in the last paragraph
-        - Confirm the keyword appears 2-4 additional times in the body
-        - Confirm article length is between 600-1500 words
-        - Confirm H1/H2/H3 hierarchy is clear
-        - Confirm external link is not a competitor site
+        https://example.com
       `;
       
-      // Call Gemini API through our service
-      const response = await geminiService.generateContent(prompt);
+      // Call Gemini API through our service with retry logic
+      const response = await geminiService.generateContent(prompt, 3, 1000);
       
       // Parse the response into structured data
       return this.parseGeminiAnalysisResponse(response, keyword);
@@ -413,66 +413,73 @@ export class KeywordAnalysisService {
     
     try {
       // Extract Page Goals
-      const goalsMatch = response.match(/Page Goals:\n([\s\S]*?)(?=\n\n|$)/);
-      if (goalsMatch && goalsMatch[1]) {
-        result.pageGoals = goalsMatch[1]
+      const goalsSection = response.split('Page Goals:')[1]?.split('Headings:')[0]?.trim();
+      if (goalsSection) {
+        result.pageGoals = goalsSection
           .split('\n')
           .filter(line => line.trim().startsWith('-'))
           .map(line => line.replace(/^-/, '').trim());
       }
       
-      // Extract H1 Headings
-      const h1Match = response.match(/H1:\n([\s\S]*?)(?=\n\n|$)/);
-      if (h1Match && h1Match[1]) {
-        result.headings.h1 = h1Match[1]
-          .split('\n')
-          .filter(line => line.trim().startsWith('-'))
-          .map(line => line.replace(/^-/, '').trim());
-      }
-      
-      // Extract H2 Headings
-      const h2Match = response.match(/H2:\n([\s\S]*?)(?=\n\n|$)/);
-      if (h2Match && h2Match[1]) {
-        result.headings.h2 = h2Match[1]
-          .split('\n')
-          .filter(line => line.trim().startsWith('-'))
-          .map(line => line.replace(/^-/, '').trim());
-      }
-      
-      // Extract H3 Headings
-      const h3Match = response.match(/H3:\n([\s\S]*?)(?=\n\n|$)/);
-      if (h3Match && h3Match[1]) {
-        result.headings.h3 = h3Match[1]
-          .split('\n')
-          .filter(line => line.trim().startsWith('-'))
-          .map(line => line.replace(/^-/, '').trim());
+      // Extract everything between "Headings:" and "Average Word Count:"
+      const headingsSection = response.split('Headings:')[1]?.split('Average Word Count:')[0]?.trim();
+      if (headingsSection) {
+        // Extract H1 headings
+        const h1Section = headingsSection.split('H1:')[1]?.split('H2:')[0]?.trim();
+        if (h1Section) {
+          result.headings.h1 = h1Section
+            .split('\n')
+            .filter(line => line.trim().startsWith('-'))
+            .map(line => line.replace(/^-/, '').trim());
+        }
+        
+        // Extract H2 headings
+        const h2Section = headingsSection.split('H2:')[1]?.split('H3:')[0]?.trim();
+        if (h2Section) {
+          result.headings.h2 = h2Section
+            .split('\n')
+            .filter(line => line.trim().startsWith('-'))
+            .map(line => line.replace(/^-/, '').trim());
+        }
+        
+        // Extract H3 headings
+        const h3Section = headingsSection.split('H3:')[1]?.split('Average Word Count:')[0]?.trim();
+        if (h3Section) {
+          result.headings.h3 = h3Section
+            .split('\n')
+            .filter(line => line.trim().startsWith('-'))
+            .map(line => line.replace(/^-/, '').trim());
+        }
       }
       
       // Extract Average Word Count
-      const wordCountMatch = response.match(/Average Word Count:\n-.*?(\d+)/);
+      const wordCountMatch = response.match(/Average Word Count:\s*(\d+)/);
       if (wordCountMatch && wordCountMatch[1]) {
         result.avgWordCount = parseInt(wordCountMatch[1], 10);
       }
       
       // Extract Keyword Density
-      const densityMatch = response.match(/Keyword Density:\n-.*?([\d.]+)/);
+      const densityMatch = response.match(/Keyword Density:\s*([\d.]+)/);
       if (densityMatch && densityMatch[1]) {
         result.keywordDensity = parseFloat(densityMatch[1]);
       }
       
       // Extract Suggested Q&A
-      const qaMatch = response.match(/Suggested Q&A:\n([\s\S]*?)(?=\n\n|$)/);
-      if (qaMatch && qaMatch[1]) {
-        result.suggestedQA = qaMatch[1]
+      const qaSection = response.split('Suggested Q&A:')[1]?.split('Recommended External Link:')[0]?.trim();
+      if (qaSection) {
+        result.suggestedQA = qaSection
           .split('\n')
           .filter(line => line.trim().startsWith('-'))
           .map(line => line.replace(/^-/, '').trim());
       }
       
       // Extract Recommended External Link
-      const linkMatch = response.match(/Recommended External Link:\n-.*?(https?:\/\/[^\s\n]+)/);
-      if (linkMatch && linkMatch[1]) {
-        result.recommendedExternalLink = linkMatch[1];
+      const linkSection = response.split('Recommended External Link:')[1]?.trim();
+      if (linkSection) {
+        const linkMatch = linkSection.match(/(https?:\/\/[^\s\n]+)/);
+        if (linkMatch && linkMatch[1]) {
+          result.recommendedExternalLink = linkMatch[1];
+        }
       }
       
       return result;
@@ -529,6 +536,7 @@ export class KeywordAnalysisService {
         throw new Error('Keyword analysis not found');
       }
       
+      // Return only the necessary fields as per requirements
       return {
         id: analysis.id,
         keyword: analysis.keyword,

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { router, protectedProcedure, adminProcedure } from '../context';
+import { router, protectedProcedure, adminProcedure } from '../trpc-context';
 import { PrismaClient } from '@prisma/client';
 import { hashPassword } from '../../utils/auth';
 import { sendTemporaryPassword } from '../../utils/email';

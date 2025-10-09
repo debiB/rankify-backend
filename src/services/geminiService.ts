@@ -2,7 +2,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import fs from 'fs';
 import path from 'path';
 import axios from 'axios';
-import cheerio from 'cheerio';
+import * as cheerio from 'cheerio';
 import pdfParse from 'pdf-parse';
 
 // Types for our brand analysis
@@ -19,6 +19,11 @@ export interface ToneData {
   };
   keywords: string[];
   summary: string;
+  // New fields for enhanced brand personalization
+  brandVoiceCharacteristics: string[];
+  targetAudienceInsights: string[];
+  valueProposition: string;
+  communicationPrinciples: string[];
 }
 
 export interface BrandAnalysisResult {
@@ -42,35 +47,81 @@ export class GeminiService {
   }
 
   /**
-   * Generate content using a custom prompt
+   * Generate content using a custom prompt with retry logic
+   * @param prompt The prompt to send to Gemini
+   * @param maxRetries Maximum number of retry attempts (default: 3)
+   * @param baseDelay Base delay in milliseconds between retries (default: 1000)
    */
-  async generateContent(prompt: string): Promise<string> {
-    try {
-      const result = await this.model.generateContent(prompt);
-      const response = await result.response;
-      return response.text();
-    } catch (error) {
-      console.error('Error generating content with Gemini:', error);
-      throw new Error('Failed to generate content');
+  async generateContent(prompt: string, maxRetries: number = 3, baseDelay: number = 1000): Promise<string> {
+    let lastError: Error | undefined;
+    
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const result = await this.model.generateContent(prompt);
+        const response = await result.response;
+        return response.text();
+      } catch (error: any) {
+        lastError = error;
+        
+        // If this is the last attempt, throw the error
+        if (attempt === maxRetries) {
+          console.error('Error generating content with Gemini after', maxRetries + 1, 'attempts:', error);
+          throw new Error('Failed to generate content after multiple attempts');
+        }
+        
+        // Check if the error is retryable (503 Service Unavailable, etc.)
+        const isRetryable = error.message?.includes('503') || 
+                           error.message?.includes('overloaded') ||
+                           error.message?.includes('Service Unavailable') ||
+                           error.message?.includes('rate limit');
+        
+        // If not retryable, throw immediately
+        if (!isRetryable) {
+          console.error('Non-retryable error generating content with Gemini:', error);
+          throw new Error('Failed to generate content: ' + error.message);
+        }
+        
+        // Calculate delay with exponential backoff
+        const delay = baseDelay * Math.pow(2, attempt);
+        
+        // Add some random jitter to prevent thundering herd
+        const jitter = Math.random() * 1000;
+        const totalDelay = delay + jitter;
+        
+        console.warn(`Gemini API error (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${Math.round(totalDelay)}ms:`, error.message);
+        
+        // Wait before retrying
+        await new Promise(resolve => setTimeout(resolve, totalDelay));
+      }
     }
+    
+    // This should never be reached, but TypeScript needs it
+    throw new Error('Failed to generate content: ' + (lastError?.message || 'Unknown error'));
   }
 
   /**
-   * Analyze brand tone and style from text content
+   * Analyze brand tone and style from text content with enhanced analysis
    */
   async analyzeBrandContent(content: string): Promise<BrandAnalysisResult> {
     const prompt = `
-      Analyze the following content and extract information about the brand's tone, style, and structure.
-      Please provide your analysis in the following format:
+      As a brand analyst expert, analyze the following content and extract comprehensive information about the brand's identity, tone, style, and communication approach.
       
-      Tone: Identify the tone (e.g., formal, casual, persuasive, friendly, professional, etc.)
+      Please provide your analysis in the following structured format:
+      
+      Tone: Identify the tone (e.g., formal, casual, persuasive, friendly, professional, authoritative, playful, etc.)
       Style: Analyze sentence length (short/medium/long), readability (simple/complex), and first-person usage (true/false for use of "we", "our", "us")
       Structure: Describe headline and subheading styles
       Keywords: List 10-15 important keywords that represent the brand
       Summary: Provide a brief summary of the brand's voice and messaging style
+      Brand Voice Characteristics: List 3-5 key characteristics that define the brand's voice (e.g., "knowledgeable", "approachable", "innovative")
+      Target Audience Insights: Describe insights about the intended audience based on the content (e.g., "tech-savvy professionals", "budget-conscious families")
+      Value Proposition: Articulate the core value proposition communicated in the content
+      Communication Principles: List 3-5 guiding principles for how this brand communicates (e.g., "clear and jargon-free", "benefit-focused", "emotionally resonant")
       
       Content to analyze:
       ${content}
+      
+      Respond ONLY with the structured format above. Do not include any additional commentary or explanation.
     `;
 
     try {
@@ -79,7 +130,7 @@ export class GeminiService {
       const text = response.text();
       
       // Parse the response into structured data
-      const toneData = this.parseAnalysisResponse(text);
+      const toneData = this.parseEnhancedAnalysisResponse(text);
       
       return {
         toneData,
@@ -159,12 +210,10 @@ export class GeminiService {
   }
 
   /**
-   * Parse the Gemini response into structured data
+   * Parse the enhanced Gemini response into structured data
    */
-  private parseAnalysisResponse(response: string): ToneData {
-    // This is a simplified parser - in a production environment, you might want to use
-    // a more robust parsing approach or modify the prompt to return JSON
-    
+  private parseEnhancedAnalysisResponse(response: string): ToneData {
+    // Initialize with default values
     const toneData: ToneData = {
       tone: [],
       style: {
@@ -177,19 +226,28 @@ export class GeminiService {
         subheadingStyle: 'unknown'
       },
       keywords: [],
-      summary: ''
+      summary: '',
+      brandVoiceCharacteristics: [],
+      targetAudienceInsights: [],
+      valueProposition: '',
+      communicationPrinciples: []
     };
 
-    // Parse tone
-    const toneMatch = response.match(/Tone:(.*?)(?=Style:|Structure:|Keywords:|Summary:|$)/is);
-    if (toneMatch && toneMatch[1]) {
-      toneData.tone = toneMatch[1].split(',').map(t => t.trim()).filter(t => t.length > 0);
+    // Helper function to extract content between markers
+    const extractSection = (text: string, sectionName: string): string => {
+      const regex = new RegExp(`${sectionName}:([\\s\\S]*?)(?=\\n\\w+:|$)`, 'i');
+      const match = text.match(regex);
+      return match ? match[1].trim() : '';
+    };
+
+    // Parse each section
+    const toneText = extractSection(response, 'Tone');
+    if (toneText) {
+      toneData.tone = toneText.split(',').map(t => t.trim()).filter(t => t.length > 0);
     }
 
-    // Parse style
-    const styleMatch = response.match(/Style:(.*?)(?=Structure:|Keywords:|Summary:|$)/is);
-    if (styleMatch && styleMatch[1]) {
-      const styleText = styleMatch[1];
+    const styleText = extractSection(response, 'Style');
+    if (styleText) {
       // Extract sentence length
       const lengthMatch = styleText.match(/sentence length.*?(short|medium|long)/i);
       if (lengthMatch) toneData.style.sentenceLength = lengthMatch[1].toLowerCase();
@@ -205,29 +263,45 @@ export class GeminiService {
       }
     }
 
-    // Parse structure
-    const structureMatch = response.match(/Structure:(.*?)(?=Keywords:|Summary:|$)/is);
-    if (structureMatch && structureMatch[1]) {
-      const structureText = structureMatch[1];
+    const structureText = extractSection(response, 'Structure');
+    if (structureText) {
       // Extract headline style
-      const headlineMatch = structureText.match(/headline.*?style.*?:\s*(.*?)(?=\n|$)/i);
+      const headlineMatch = structureText.match(/headline.*?style.*?:?\s*(.*?)(?=\n|$)/i);
       if (headlineMatch) toneData.structure.headlineStyle = headlineMatch[1].trim();
       
       // Extract subheading style
-      const subheadingMatch = structureText.match(/subheading.*?style.*?:\s*(.*?)(?=\n|$)/i);
+      const subheadingMatch = structureText.match(/subheading.*?style.*?:?\s*(.*?)(?=\n|$)/i);
       if (subheadingMatch) toneData.structure.subheadingStyle = subheadingMatch[1].trim();
     }
 
-    // Parse keywords
-    const keywordsMatch = response.match(/Keywords:(.*?)(?=Summary:|$)/is);
-    if (keywordsMatch && keywordsMatch[1]) {
-      toneData.keywords = keywordsMatch[1].split(',').map(k => k.trim()).filter(k => k.length > 0);
+    const keywordsText = extractSection(response, 'Keywords');
+    if (keywordsText) {
+      toneData.keywords = keywordsText.split(',').map(k => k.trim()).filter(k => k.length > 0);
     }
 
-    // Parse summary
-    const summaryMatch = response.match(/Summary:(.*?)(?=$)/is);
-    if (summaryMatch && summaryMatch[1]) {
-      toneData.summary = summaryMatch[1].trim();
+    const summaryText = extractSection(response, 'Summary');
+    if (summaryText) {
+      toneData.summary = summaryText;
+    }
+
+    const brandVoiceText = extractSection(response, 'Brand Voice Characteristics');
+    if (brandVoiceText) {
+      toneData.brandVoiceCharacteristics = brandVoiceText.split(',').map(c => c.trim()).filter(c => c.length > 0);
+    }
+
+    const audienceText = extractSection(response, 'Target Audience Insights');
+    if (audienceText) {
+      toneData.targetAudienceInsights = audienceText.split(',').map(a => a.trim()).filter(a => a.length > 0);
+    }
+
+    const valuePropText = extractSection(response, 'Value Proposition');
+    if (valuePropText) {
+      toneData.valueProposition = valuePropText;
+    }
+
+    const principlesText = extractSection(response, 'Communication Principles');
+    if (principlesText) {
+      toneData.communicationPrinciples = principlesText.split(',').map(p => p.trim()).filter(p => p.length > 0);
     }
 
     return toneData;

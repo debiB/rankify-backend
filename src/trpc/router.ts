@@ -1,4 +1,4 @@
-import { router } from './context';
+import { router } from './trpc-context';
 import { authRouter } from './routers/auth';
 import { usersRouter } from './routers/users';
 import { googleAccountsRouter } from './routers/googleAccounts';
@@ -11,14 +11,10 @@ import { contentGenerationRouter } from './routers/contentGeneration';
 import type { inferRouterInputs, inferRouterOutputs } from '@trpc/server';
 import { milestonesRouter } from './routers/milestones';
 import { whatsappRouter } from './routers/whatsapp';
-import { cannibalizationRouter } from './routers/cannibalization';
+import { keywordCannibalizationRouter } from './routers/keywordCannibalization';
 import { settingsRouter } from './routers/settings';
 
-// Import the router type to avoid TypeScript inference issues
-import type { AnyRouter } from '@trpc/server';
-
-// Explicitly type the appRouter to avoid TypeScript inference issues
-export const appRouter: AnyRouter = router({
+export const appRouter = router({
   auth: authRouter,
   users: usersRouter,
   googleAccounts: googleAccountsRouter,
@@ -30,9 +26,8 @@ export const appRouter: AnyRouter = router({
   contentGeneration: contentGenerationRouter,
   milestones: milestonesRouter,
   whatsapp: whatsappRouter,
-  cannibalization: cannibalizationRouter,
+  keywordCannibalization: keywordCannibalizationRouter,
   settings: settingsRouter,
 });
-
 
 export type AppRouter = typeof appRouter;

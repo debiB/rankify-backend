@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
-import { adminProcedure, protectedProcedure, router } from '../context';
+import { adminProcedure, protectedProcedure, router } from '../trpc-context';
 import { prisma } from '../../utils/prisma';
 import { CronService } from '../../services/cronService';
 import { AnalyticsService } from '../../services/analytics';

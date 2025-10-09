@@ -1,9 +1,8 @@
-import { router, publicProcedure } from '../context';
+import { router, publicProcedure } from '../trpc-context';
 import { keywordAnalysisService } from '../../services/keywordAnalysisService';
 import { z } from 'zod';
-import type { AnyRouter } from '@trpc/server';
 
-export const keywordAnalysisRouter: AnyRouter = router({
+export const keywordAnalysisRouter = router({
   /**
    * Submit a keyword for analysis
    * POST /keyword/analyze

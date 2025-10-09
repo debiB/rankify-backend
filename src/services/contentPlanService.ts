@@ -1,5 +1,6 @@
 import { prisma } from '../utils/prisma';
 import { keywordAnalysisService } from './keywordAnalysisService';
+import { articleStructureService } from './articleStructureService';
 
 // Define types for our content plan
 interface HeadlineStructure {
@@ -17,7 +18,7 @@ export interface ContentPlanData {
   style: string;
 }
 
-interface GeneratedContentPlan extends ContentPlanData {
+export interface GeneratedContentPlan extends ContentPlanData {
   id: string;
   adminApproved: boolean;
   createdAt: Date;
@@ -28,19 +29,26 @@ export class ContentPlanService {
   /**
    * Generate a content plan from keyword analysis
    * @param keywordAnalysisId The ID of the keyword analysis to use
+   * @param brandProfileId Optional ID of the brand profile to use for tone and style
    * @returns The generated content plan ID
    */
-  async generateContentPlan(keywordAnalysisId: string): Promise<string> {
+  async generateContentPlan(keywordAnalysisId: string, brandProfileId?: string): Promise<string> {
     try {
       // Get the keyword analysis data
       const keywordAnalysis = await keywordAnalysisService.getAnalysisById(keywordAnalysisId);
       
-      // Generate content plan based on keyword analysis
+      // Generate article structure using the new service
+      const articleStructure = await articleStructureService.generateArticleStructure(
+        keywordAnalysisId,
+        brandProfileId
+      );
+      
+      // Generate content plan based on keyword analysis and article structure
       const contentPlanData: ContentPlanData = {
         keywordAnalysisId,
-        articleGoal: this.generateArticleGoal(keywordAnalysis),
-        headlines: this.generateHeadlines(keywordAnalysis),
-        subheadings: this.generateSubheadings(keywordAnalysis),
+        articleGoal: articleStructure.goal,
+        headlines: [articleStructure.headline], // H1 headline
+        subheadings: articleStructure.structure.map(section => section.H2), // H2 sections as subheadings
         recommendedWordCount: this.calculateWordCount(keywordAnalysis),
         keywordPlacement: this.determineKeywordPlacement(keywordAnalysis),
         style: this.determineStyle(keywordAnalysis)
@@ -148,59 +156,6 @@ export class ContentPlanService {
       console.error('Error updating content plan:', error);
       throw new Error(`Failed to update content plan: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
-  }
-  
-  /**
-   * Generate article goal based on keyword analysis
-   */
-  private generateArticleGoal(keywordAnalysis: any): string {
-    // Use the first page goal from the keyword analysis or create a default
-    if (keywordAnalysis.pageGoals && keywordAnalysis.pageGoals.length > 0) {
-      return keywordAnalysis.pageGoals[0];
-    }
-    
-    return `Provide comprehensive information about ${keywordAnalysis.keyword} to help users understand its importance and application.`;
-  }
-  
-  /**
-   * Generate headlines based on keyword analysis
-   */
-  private generateHeadlines(keywordAnalysis: any): string[] {
-    // Start with H1 headlines from keyword analysis
-    let headlines: string[] = [];
-    
-    if (keywordAnalysis.headings?.h1 && keywordAnalysis.headings.h1.length > 0) {
-      headlines = [...keywordAnalysis.headings.h1];
-    } else {
-      // Generate default H1 headline
-      headlines.push(`The Ultimate Guide to ${keywordAnalysis.keyword}`);
-    }
-    
-    // Add H2 headlines if available
-    if (keywordAnalysis.headings?.h2 && keywordAnalysis.headings.h2.length > 0) {
-      headlines = [...headlines, ...keywordAnalysis.headings.h2];
-    }
-    
-    return headlines;
-  }
-  
-  /**
-   * Generate subheadings based on keyword analysis
-   */
-  private generateSubheadings(keywordAnalysis: any): string[] {
-    // Use H3 headlines from keyword analysis as subheadings
-    if (keywordAnalysis.headings?.h3 && keywordAnalysis.headings.h3.length > 0) {
-      return keywordAnalysis.headings.h3;
-    }
-    
-    // Generate default subheadings if none provided
-    return [
-      `Understanding ${keywordAnalysis.keyword}`,
-      `Benefits of ${keywordAnalysis.keyword}`,
-      `Best Practices for ${keywordAnalysis.keyword}`,
-      `Common Mistakes to Avoid`,
-      `Conclusion`
-    ];
   }
   
   /**
