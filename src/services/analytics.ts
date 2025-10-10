@@ -1137,14 +1137,16 @@ export class AnalyticsService {
     }
   }
 
-  private async fetchTrafficData({
+  async fetchTrafficData({
     campaign,
     googleAccount,
     waitForAllData,
+    selectedMonth,
   }: {
     campaign: Campaign;
     googleAccount: GoogleAccount;
     waitForAllData: boolean;
+    selectedMonth?: string;
   }): Promise<{
     monthly: Record<
       string,
@@ -1197,9 +1199,33 @@ export class AnalyticsService {
         }
       }
 
-      // Fetch daily traffic data for the current month (from first day to end of month)
-      const dailyStartDate = moment().startOf('month').startOf('day');
-      const dailyEndDate = moment().endOf('month').endOf('day');
+      // Determine which month to fetch daily data for
+      let dailyStartDate: moment.Moment;
+      let dailyEndDate: moment.Moment;
+      
+      if (selectedMonth) {
+        // Parse month string like "Oct 24" or "Aug 24"
+        const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const [monthStr, yearStr] = selectedMonth.split(' ');
+        const monthIndex = monthNames.indexOf(monthStr);
+        
+        if (monthIndex !== -1) {
+          const year = 2000 + parseInt(yearStr); // Convert "24" to 2024
+          dailyStartDate = moment([year, monthIndex]).startOf('month');
+          dailyEndDate = moment([year, monthIndex]).endOf('month');
+          console.log(`[fetchTrafficData] Using selected month: ${selectedMonth}, date range: ${dailyStartDate.format('YYYY-MM-DD')} to ${dailyEndDate.format('YYYY-MM-DD')}`);
+        } else {
+          // Fallback to current month if parsing fails
+          dailyStartDate = moment().startOf('month');
+          dailyEndDate = moment().endOf('month');
+          console.log(`[fetchTrafficData] Failed to parse month: ${selectedMonth}, using current month`);
+        }
+      } else {
+        // Default to current month
+        dailyStartDate = moment().startOf('month');
+        dailyEndDate = moment().endOf('month');
+        console.log(`[fetchTrafficData] No month selected, using current month`);
+      }
 
       const dailyTraffic = await this.fetchDailyTrafficData({
         campaign,

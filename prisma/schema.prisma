@@ -64,6 +64,7 @@ model Campaign {
   sentMilestones       SentMilestone[]
   emailPreferences     UserCampaignEmailPreference[]
   cannibalizationAudits KeywordCannibalizationAudit[]
+  topKeywords          TopKeywordData[]
 
   @@index([googleAccountId], map: "Campaign_googleAccountId_fkey")
   @@index([userId], map: "Campaign_userId_fkey")
@@ -452,6 +453,26 @@ model SearchConsoleKeywordMonthlyComputed {
 
   @@unique([keywordId, month, year])
   @@index([month, year])
+}
+
+// Top keywords data fetched from GSC
+model TopKeywordData {
+  id                  String   @id @default(cuid())
+  campaignId          String
+  keyword             String   @db.VarChar(500)
+  month               Int
+  year                Int
+  averageRank         Float
+  clicks              Int
+  impressions         Int
+  rankChange          Float
+  rankChangeDirection String   // 'up', 'down', 'same'
+  fetchedAt           DateTime @default(now())
+  campaign            Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@unique([campaignId, keyword(length: 255), month, year])
+  @@index([campaignId, month, year])
+  @@index([fetchedAt])
 }
 
 // User settings preferences

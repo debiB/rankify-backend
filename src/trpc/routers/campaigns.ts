@@ -2425,6 +2425,7 @@ export const campaignsRouter = router({
     .input(
       z.object({
         campaignId: z.string().min(1, 'Campaign ID is required'),
+        month: z.string().optional(), // Format: "Oct 24" or "Aug 24"
       })
     )
     .query(async ({ input, ctx }) => {
@@ -2462,6 +2463,103 @@ export const campaignsRouter = router({
               },
             },
           });
+          
+        // Parse the selected month to get the correct year and month
+        const monthNamesForParsing = [
+          "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+          "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        ];
+        
+        let selectedTargetYear: number;
+        let selectedTargetMonth: number;
+        
+        if (input.month) {
+          const [monthStr, yearStr] = input.month.split(' ');
+          const monthIndex = monthNamesForParsing.indexOf(monthStr);
+          selectedTargetMonth = monthIndex;
+          selectedTargetYear = 2000 + parseInt(yearStr);
+        } else {
+          const currentDate = new Date();
+          selectedTargetMonth = currentDate.getMonth();
+          selectedTargetYear = currentDate.getFullYear();
+        }
+        
+        // Check if we have data for the selected month
+        let hasDataForSelectedMonth = false;
+        
+        if (trafficAnalytics && trafficAnalytics.daily.length > 0) {
+          hasDataForSelectedMonth = trafficAnalytics.daily.some(day => {
+            const date = new Date(day.date);
+            return date.getMonth() === selectedTargetMonth && date.getFullYear() === selectedTargetYear;
+          });
+        }
+        
+        // If a month is selected and we don't have data for it, fetch from Google Search Console
+        if (input.month && campaign.googleAccountId && (!hasDataForSelectedMonth || input.month.includes(new Date().getFullYear().toString().substring(2)))) {
+          const googleAccount = await prisma.googleAccount.findUnique({
+            where: { id: campaign.googleAccountId },
+          });
+          
+          if (googleAccount) {
+            const analyticsService = new AnalyticsService();
+            const freshData = await analyticsService.fetchTrafficData({
+              campaign,
+              googleAccount,
+              waitForAllData: false,
+              selectedMonth: input.month,
+            });
+            
+            if (freshData && freshData.daily && Object.keys(freshData.daily).length > 0) {
+              console.log(`[getCampaignTrafficData] Fetched fresh data for selected month: ${input.month}`);
+              
+              // Update the daily data in the database
+              for (const [dateKey, metrics] of Object.entries(freshData.daily)) {
+                const date = new Date(dateKey);
+                await prisma.searchConsoleTrafficDaily.upsert({
+                  where: {
+                    analyticsId_date: {
+                      analyticsId: trafficAnalytics?.id || '',
+                      date,
+                    },
+                  },
+                  update: {
+                    clicks: metrics.clicks,
+                    impressions: metrics.impressions,
+                    ctr: metrics.ctr,
+                    position: metrics.position,
+                  },
+                  create: {
+                    analyticsId: trafficAnalytics?.id || '',
+                    date,
+                    clicks: metrics.clicks,
+                    impressions: metrics.impressions,
+                    ctr: metrics.ctr,
+                    position: metrics.position,
+                  },
+                });
+              }
+              
+              // Refresh the traffic analytics data
+              const updatedTrafficAnalytics = await prisma.searchConsoleTrafficAnalytics.findFirst({
+                where: { id: trafficAnalytics?.id || '' },
+                include: {
+                  monthly: {
+                    orderBy: [{ year: 'asc' }, { month: 'asc' }],
+                  },
+                  daily: {
+                    orderBy: { date: 'asc' },
+                  },
+                },
+              });
+              
+              if (updatedTrafficAnalytics) {
+                if (trafficAnalytics) {
+                  trafficAnalytics.daily = updatedTrafficAnalytics.daily;
+                }
+              }
+            }
+          }
+        }
 
         if (!trafficAnalytics) {
           return {
@@ -2480,7 +2578,7 @@ export const campaignsRouter = router({
           position: number;
         }> = [];
 
-        const monthNames = [
+        const monthNamesForDisplay = [
           'Jan',
           'Feb',
           'Mar',
@@ -2502,7 +2600,7 @@ export const campaignsRouter = router({
             currentDate.getMonth() - i,
             1
           );
-          const monthName = monthNames[date.getMonth()];
+          const monthName = monthNamesForDisplay[date.getMonth()];
           const year = date.getFullYear().toString().slice(-2);
           const monthKey = `${monthName} ${year}`;
 
@@ -2530,7 +2628,21 @@ export const campaignsRouter = router({
         // Add current month data by aggregating daily records
         const currentMonthForChart = new Date().getMonth();
         const currentYearForChart = new Date().getFullYear();
-        const currentMonthName = monthNames[currentMonthForChart];
+        const monthNamesForFormatting = [
+          'Jan',
+          'Feb',
+          'Mar',
+          'Apr',
+          'May',
+          'Jun',
+          'Jul',
+          'Aug',
+          'Sep',
+          'Oct',
+          'Nov',
+          'Dec',
+        ];
+        const currentMonthName = monthNamesForFormatting[currentMonthForChart];
         const currentYearShort = currentYearForChart.toString().slice(-2);
         const currentMonthKey = `${currentMonthName} ${currentYearShort}`;
 
@@ -2548,15 +2660,15 @@ export const campaignsRouter = router({
         // Aggregate current month data from daily records
         if (currentMonthDailyRecords.length > 0) {
           const totalClicks = currentMonthDailyRecords.reduce(
-            (sum, day) => sum + day.clicks,
+            (sum, day) => sum + (day?.clicks || 0),
             0
           );
           const totalImpressions = currentMonthDailyRecords.reduce(
-            (sum, day) => sum + day.impressions,
+            (sum, day) => sum + (day?.impressions || 0),
             0
           );
           const totalPosition = currentMonthDailyRecords.reduce(
-            (sum, day) => sum + day.position,
+            (sum, day) => sum + (day?.position || 0),
             0
           );
 
@@ -2578,22 +2690,38 @@ export const campaignsRouter = router({
 
         const monthlyData = last12Months;
 
-        // Format daily data for charts (current month only)
-        const currentMonth = new Date().getMonth();
-        const currentYear = new Date().getFullYear();
+        // Format daily data for charts
+        // Parse the selected month if provided, otherwise use current month
+        let filterTargetMonth = new Date().getMonth();
+        let filterTargetYear = new Date().getFullYear();
+        
+        if (input.month) {
+          // Parse month string like "Oct 24" or "Aug 24"
+          const [monthStr, yearStr] = input.month.split(' ');
+          const monthIndex = monthNamesForDisplay.indexOf(monthStr);
+          if (monthIndex !== -1) {
+            filterTargetMonth = monthIndex;
+            filterTargetYear = 2000 + parseInt(yearStr); // Convert "24" to 2024
+          }
+          console.log(`[getCampaignTrafficData] Parsed month: ${monthStr} ${yearStr} -> targetMonth: ${filterTargetMonth}, targetYear: ${filterTargetYear}`);
+        }
+
+        console.log(`[getCampaignTrafficData] Filtering for month: ${filterTargetMonth} (0-indexed), year: ${filterTargetYear}`);
+        console.log(`[getCampaignTrafficData] Total daily records before filter: ${trafficAnalytics.daily.length}`);
 
         const dailyData = trafficAnalytics.daily
           .filter((day) => {
             const date = new Date(day.date);
-            return (
-              date.getMonth() === currentMonth &&
-              date.getFullYear() === currentYear
-            );
+            const matches = date.getMonth() === filterTargetMonth && date.getFullYear() === filterTargetYear;
+            if (!matches && input.month) {
+              console.log(`[getCampaignTrafficData] Filtering out date: ${day.date}, month: ${date.getMonth()}, year: ${date.getFullYear()}`);
+            }
+            return matches;
           })
           .map((day) => {
             const date = new Date(day.date);
             const dayOfMonth = date.getDate();
-            const monthNames = [
+            const monthNamesForFormatting = [
               'Jan',
               'Feb',
               'Mar',
@@ -2607,14 +2735,14 @@ export const campaignsRouter = router({
               'Nov',
               'Dec',
             ];
-            const monthName = monthNames[date.getMonth()];
+            const monthName = monthNamesForFormatting[date.getMonth()];
 
             return {
               date: `${dayOfMonth} ${monthName}`,
-              clicks: day.clicks,
-              impressions: day.impressions,
-              ctr: day.ctr,
-              position: day.position,
+              clicks: day?.clicks || 0,
+              impressions: day?.impressions || 0,
+              ctr: day?.ctr || 0,
+              position: day?.position || 0,
             };
           })
           .sort((a, b) => {
@@ -2623,6 +2751,11 @@ export const campaignsRouter = router({
             const dayB = parseInt(b.date.split(' ')[0]);
             return dayA - dayB;
           });
+
+        console.log(`[getCampaignTrafficData] Filtered daily records: ${dailyData.length}`);
+        if (dailyData.length > 0) {
+          console.log(`[getCampaignTrafficData] First day: ${dailyData[0].date}, Last day: ${dailyData[dailyData.length - 1].date}`);
+        }
 
         return {
           monthly: monthlyData,
@@ -3850,6 +3983,7 @@ export const campaignsRouter = router({
     .input(
       z.object({
         campaignId: z.string(),
+        month: z.string().optional(), // Format: "Oct 24" or "Aug 24"
       })
     )
     .query(async ({ input, ctx }) => {
@@ -3885,9 +4019,32 @@ export const campaignsRouter = router({
         });
       }
 
-      const currentDate = new Date();
-      const currentMonth = currentDate.getMonth() + 1; // 1-based
-      const currentYear = currentDate.getFullYear();
+      // Parse the selected month if provided, otherwise use current month
+      let targetMonth: number;
+      let targetYear: number;
+      
+      if (input.month) {
+        // Parse month string like "Oct 24" or "Aug 24"
+        const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const [monthStr, yearStr] = input.month.split(' ');
+        const monthIndex = monthNames.indexOf(monthStr);
+        if (monthIndex !== -1) {
+          targetMonth = monthIndex + 1; // 1-based
+          targetYear = 2000 + parseInt(yearStr); // Convert "24" to 2024
+        } else {
+          // Fallback to current month if parsing fails
+          const currentDate = new Date();
+          targetMonth = currentDate.getMonth() + 1;
+          targetYear = currentDate.getFullYear();
+        }
+      } else {
+        const currentDate = new Date();
+        targetMonth = currentDate.getMonth() + 1;
+        targetYear = currentDate.getFullYear();
+      }
+
+      const currentMonth = targetMonth;
+      const currentYear = targetYear;
 
       // Get previous month
       const prevDate = new Date(currentYear, currentMonth - 2, 1);
@@ -3971,13 +4128,14 @@ export const campaignsRouter = router({
       z.object({
         campaignId: z.string(),
         limit: z.number().min(1).max(50).default(10),
+        month: z.string().optional(), // Format: "Oct 24" or "Aug 24"
       })
     )
     .query(async ({ input, ctx }) => {
     try {
       const { campaignId, limit } = input;
 
-      // Get the campaign
+      // Get the campaign with Google account
       const campaign = await prisma.campaign.findFirst({
         where: { id: campaignId },
         include: {
@@ -3988,6 +4146,7 @@ export const campaignsRouter = router({
               email: true,
             },
           },
+          googleAccount: true,
         },
       });
 
@@ -4006,91 +4165,185 @@ export const campaignsRouter = router({
         });
       }
 
-      const currentDate = new Date();
-      const currentMonth = currentDate.getMonth() + 1; // 1-based
-      const currentYear = currentDate.getFullYear();
-
-      // Get the analytics ID for this campaign
-      const analytics = await prisma.searchConsoleKeywordAnalytics.findFirst({
-        where: { siteUrl: campaign.searchConsoleSite },
-      });
-
-      if (!analytics) {
-        return { keywords: [] };
+      // Parse the selected month if provided, otherwise use current month
+      let targetMonth: number;
+      let targetYear: number;
+      
+      if (input.month) {
+        // Parse month string like "Oct 24" or "Aug 24"
+        const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const [monthStr, yearStr] = input.month.split(' ');
+        const monthIndex = monthNames.indexOf(monthStr);
+        if (monthIndex !== -1) {
+          targetMonth = monthIndex + 1; // 1-based for database
+          targetYear = 2000 + parseInt(yearStr); // Convert "24" to 2024
+        } else {
+          // Fallback to current month if parsing fails
+          const currentDate = new Date();
+          targetMonth = currentDate.getMonth() + 1;
+          targetYear = currentDate.getFullYear();
+        }
+      } else {
+        const currentDate = new Date();
+        targetMonth = currentDate.getMonth() + 1;
+        targetYear = currentDate.getFullYear();
       }
 
-      // Get keywords with current month computed data
-      const keywordsWithData = await prisma.searchConsoleKeywordMonthlyComputed.findMany({
+      // Fetch from database
+      let topKeywords = await prisma.topKeywordData.findMany({
         where: {
-          keyword: {
-            analyticsId: analytics.id
-          },
-          month: currentMonth,
-          year: currentYear,
+          campaignId,
+          month: targetMonth,
+          year: targetYear,
         },
-        include: {
-          keyword: {
-            include: {
-              dailyStats: {
-                where: {
-                  date: {
-                    gte: new Date(currentYear, currentMonth - 1, 1),
-                    lt: new Date(currentYear, currentMonth, 1),
-                  },
-                },
-                orderBy: { date: 'desc' },
-              },
-            },
-          },
+        orderBy: {
+          clicks: 'desc',
         },
-        orderBy: { clicks: 'desc' },
         take: limit,
       });
 
-      // Get previous month data for comparison
-      const prevMonth = currentMonth === 1 ? 12 : currentMonth - 1;
-      const prevYear = currentMonth === 1 ? currentYear - 1 : currentYear;
+      // If no data exists in DB, fetch from GSC and store it
+      if (topKeywords.length === 0 && campaign.googleAccount) {
+        console.log(`📊 No top keywords data found for campaign ${campaign.name}, fetching from GSC...`);
+        
+        try {
+          // Calculate date range for target month
+          const startDate = moment.utc([targetYear, targetMonth - 1, 1]); // moment months are 0-based
+          const endDate = moment.utc([targetYear, targetMonth - 1, 1]).endOf('month');
 
-      const previousData = await prisma.searchConsoleKeywordMonthlyComputed.findMany({
-        where: {
-          keywordId: {
-            in: keywordsWithData.map(k => k.keywordId)
-          },
-          month: prevMonth,
-          year: prevYear,
-        },
-      });
+          // Fetch current month data from GSC
+          const currentMonthData = await searchConsoleService.getAnalytics({
+            campaign,
+            googleAccount: campaign.googleAccount,
+            startAt: startDate,
+            endAt: endDate,
+            dimensions: ['query'],
+          });
 
-      // Process keywords
-      const keywords = keywordsWithData.map(computed => {
-        const keyword = computed.keyword;
-        const previousComputed = previousData.find(p => p.keywordId === keyword.id);
+          if (currentMonthData && currentMonthData.length > 0) {
+            // Fetch previous month data for comparison
+            const prevStartDate = moment.utc([targetYear, targetMonth - 1, 1]).subtract(1, 'month');
+            const prevEndDate = moment.utc([targetYear, targetMonth - 1, 1]).subtract(1, 'month').endOf('month');
 
-        // Calculate average rank from daily stats
-        const dailyRanks = keyword.dailyStats.map(stat => stat.averageRank).filter(rank => rank !== null);
-        const averageRank = dailyRanks.length > 0 
-          ? dailyRanks.reduce((sum, rank) => sum + rank!, 0) / dailyRanks.length 
-          : 0;
+            const previousMonthData = await searchConsoleService.getAnalytics({
+              campaign,
+              googleAccount: campaign.googleAccount,
+              startAt: prevStartDate,
+              endAt: prevEndDate,
+              dimensions: ['query'],
+            });
 
-        // Calculate rank change
-        let rankChange = 0;
-        let rankChangeDirection: 'up' | 'down' | 'same' = 'same';
+            // Create a map of previous month data
+            // Note: GSC service automatically adds 'date' dimension, so keys are [date, query]
+            const prevMonthMap = new Map<string, { position: number }>();
+            if (previousMonthData) {
+              previousMonthData.forEach(row => {
+                // keys[0] is date, keys[1] is query (keyword)
+                const keyword = row.keys?.[1];
+                if (keyword && row.position) {
+                  prevMonthMap.set(keyword, { position: row.position });
+                }
+              });
+            }
 
-        if (previousComputed && averageRank > 0 && previousComputed.averageRank > 0) {
-          rankChange = previousComputed.averageRank - averageRank;
-          if (rankChange > 0) rankChangeDirection = 'up';
-          else if (rankChange < 0) rankChangeDirection = 'down';
+            // Process and store top 50 keywords
+            // Note: GSC service automatically adds 'date' dimension, so keys are [date, query]
+            const keywordsToStore = currentMonthData
+              .map(row => {
+                // keys[0] is date, keys[1] is query (keyword)
+                const keyword = row.keys?.[1];
+                if (!keyword) return null;
+
+                const currentPosition = row.position || 0;
+                const previousPosition = prevMonthMap.get(keyword)?.position || 0;
+
+                let rankChange = 0;
+                let rankChangeDirection: 'up' | 'down' | 'same' = 'same';
+
+                if (previousPosition > 0 && currentPosition > 0) {
+                  rankChange = previousPosition - currentPosition;
+                  if (rankChange > 0) rankChangeDirection = 'up';
+                  else if (rankChange < 0) rankChangeDirection = 'down';
+                }
+
+                return {
+                  keyword,
+                  averageRank: currentPosition,
+                  clicks: row.clicks || 0,
+                  impressions: row.impressions || 0,
+                  rankChange: Math.abs(rankChange),
+                  rankChangeDirection,
+                };
+              })
+              .filter((k): k is NonNullable<typeof k> => k !== null)
+              .sort((a, b) => b.clicks - a.clicks)
+              .slice(0, 50); // Store top 50
+
+            // Store keywords in database
+            for (const kw of keywordsToStore) {
+              await prisma.topKeywordData.upsert({
+                where: {
+                  campaignId_keyword_month_year: {
+                    campaignId: campaign.id,
+                    keyword: kw.keyword,
+                    month: targetMonth,
+                    year: targetYear,
+                  },
+                },
+                update: {
+                  averageRank: kw.averageRank,
+                  clicks: kw.clicks,
+                  impressions: kw.impressions,
+                  rankChange: kw.rankChange,
+                  rankChangeDirection: kw.rankChangeDirection,
+                  fetchedAt: new Date(),
+                },
+                create: {
+                  campaignId: campaign.id,
+                  keyword: kw.keyword,
+                  month: targetMonth,
+                  year: targetYear,
+                  averageRank: kw.averageRank,
+                  clicks: kw.clicks,
+                  impressions: kw.impressions,
+                  rankChange: kw.rankChange,
+                  rankChangeDirection: kw.rankChangeDirection,
+                },
+              });
+            }
+
+            console.log(`✅ Stored ${keywordsToStore.length} top keywords for campaign ${campaign.name}`);
+            
+            // Fetch the newly stored data
+            topKeywords = await prisma.topKeywordData.findMany({
+              where: {
+                campaignId,
+                month: targetMonth,
+                year: targetYear,
+              },
+              orderBy: {
+                clicks: 'desc',
+              },
+              take: limit,
+            });
+          } else {
+            console.log(`ℹ️  No GSC data available for campaign ${campaign.name} for ${targetMonth}/${targetYear}`);
+          }
+        } catch (gscError) {
+          console.error(`❌ Error fetching from GSC for campaign ${campaign.name}:`, gscError);
+          // Continue with empty data rather than throwing error
         }
+      }
 
-        return {
-          keyword: keyword.keyword,
-          averageRank: parseFloat(averageRank.toFixed(2)),
-          clicks: computed.clicks,
-          impressions: computed.impressions,
-          rankChange: Math.abs(rankChange),
-          rankChangeDirection,
-        };
-      });
+      // Format the response
+      const keywords = topKeywords.map(kw => ({
+        keyword: kw.keyword,
+        averageRank: kw.averageRank,
+        clicks: kw.clicks,
+        impressions: kw.impressions,
+        rankChange: kw.rankChange,
+        rankChangeDirection: kw.rankChangeDirection as 'up' | 'down' | 'same',
+      }));
 
       return { keywords };
     } catch (error) {
@@ -4217,5 +4470,86 @@ export const campaignsRouter = router({
       });
     }
   }),
-});
 
+  // Check if milestone is achieved for a campaign
+  checkMilestoneAchievement: protectedProcedure
+    .input(
+      z.object({
+        campaignId: z.string(),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      try {
+        const { campaignId } = input;
+
+        // Verify campaign access
+        const campaign = await prisma.campaign.findUnique({
+          where: { id: campaignId },
+          include: { user: true },
+        });
+
+        if (!campaign) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'Campaign not found',
+          });
+        }
+
+        // Check if user has access to this campaign
+        if (ctx.user.role !== 'ADMIN' && campaign.userId !== ctx.user.id) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'You do not have access to this campaign',
+          });
+        }
+
+        // Get admin notification preferences to check click threshold
+        const adminPrefs = await prisma.adminNotificationPreferences.findFirst();
+        
+        if (!adminPrefs || !adminPrefs.clickThresholds) {
+          return {
+            achieved: false,
+            clicksThreshold: 0,
+            currentClicks: 0,
+          };
+        }
+
+        const clickThresholds = JSON.parse(adminPrefs.clickThresholds) as number[];
+        const clicksThreshold = clickThresholds[0] || 100; // Use first threshold
+
+        // Get total clicks for the last year
+        const oneYearAgo = new Date();
+        oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+
+        const trafficAnalytics = await prisma.searchConsoleTrafficAnalytics.findFirst({
+          where: { siteUrl: campaign.searchConsoleSite },
+          include: {
+            daily: {
+              where: {
+                date: {
+                  gte: oneYearAgo,
+                },
+              },
+            },
+          },
+        });
+
+        const currentClicks = trafficAnalytics?.daily.reduce(
+          (sum: number, stat: { clicks: number }) => sum + stat.clicks,
+          0
+        ) || 0;
+
+        return {
+          achieved: currentClicks >= clicksThreshold,
+          clicksThreshold,
+          currentClicks,
+        };
+      } catch (error) {
+        console.error('Error in checkMilestoneAchievement:', error);
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to check milestone achievement',
+        });
+      }
+    }),
+});

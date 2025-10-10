@@ -150,15 +150,31 @@ export const authRouter = router({
       z.object({
         firstName: z.string().optional().nullable(),
         lastName: z.string().optional().nullable(),
+        email: z.string().email().optional(),
         phoneNumber: z.string().optional().nullable(),
         countryCode: z.string().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
+      // Check if email is being changed and if it's already taken
+      if (input.email) {
+        const existingUser = await prisma.user.findFirst({
+          where: {
+            email: input.email,
+            NOT: { id: ctx.user.id },
+          },
+        });
+        
+        if (existingUser) {
+          throw new Error('Email is already in use by another account');
+        }
+      }
+
       // Filter out undefined values and convert empty strings to null
       const updateData: any = {};
       if (input.firstName !== undefined) updateData.firstName = input.firstName || null;
       if (input.lastName !== undefined) updateData.lastName = input.lastName || null;
+      if (input.email !== undefined) updateData.email = input.email;
       if (input.phoneNumber !== undefined) updateData.phoneNumber = input.phoneNumber || null;
       if (input.countryCode !== undefined) updateData.countryCode = input.countryCode || null;
 
