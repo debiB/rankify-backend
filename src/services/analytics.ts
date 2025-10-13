@@ -406,14 +406,14 @@ export class AnalyticsService {
       averageCtr:
         totalStats.totalImpressions > 0
           ? Math.round(
-              (totalStats.totalClicks / totalStats.totalImpressions) * 100 * 10
-            ) / 10
+            (totalStats.totalClicks / totalStats.totalImpressions) * 100 * 10
+          ) / 10
           : 0,
       averagePosition:
         totalStats.totalImpressions > 0
           ? Math.round(
-              (totalStats.sumOfPositions / totalStats.totalImpressions) * 10
-            ) / 10
+            (totalStats.sumOfPositions / totalStats.totalImpressions) * 10
+          ) / 10
           : 0,
     };
   };
@@ -447,14 +447,14 @@ export class AnalyticsService {
       averageCtr:
         stats.totalImpressions > 0
           ? Math.round(
-              (stats.totalClicks / stats.totalImpressions) * 100 * 10
-            ) / 10
+            (stats.totalClicks / stats.totalImpressions) * 100 * 10
+          ) / 10
           : 0,
       averagePosition:
         stats.totalImpressions > 0
           ? Math.round(
-              (stats.sumOfWeightedPositions / stats.totalImpressions) * 10
-            ) / 10
+            (stats.sumOfWeightedPositions / stats.totalImpressions) * 10
+          ) / 10
           : 0,
     };
   };
@@ -1202,15 +1202,18 @@ export class AnalyticsService {
       // Determine which month to fetch daily data for
       let dailyStartDate: moment.Moment;
       let dailyEndDate: moment.Moment;
-      
+
       if (selectedMonth) {
-        // Parse month string like "Oct 24" or "Aug 24"
-        const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-        const [monthStr, yearStr] = selectedMonth.split(' ');
-        const monthIndex = monthNames.indexOf(monthStr);
-        
+        // Supports "Oct 24" or "October 2025"
+        const monthNamesAbbrev = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const monthNamesFull = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+        const [monthStr, yearStrRaw] = selectedMonth.split(' ');
+        let monthIndex = monthNamesAbbrev.indexOf(monthStr);
+        if (monthIndex === -1) monthIndex = monthNamesFull.indexOf(monthStr);
+
         if (monthIndex !== -1) {
-          const year = 2000 + parseInt(yearStr); // Convert "24" to 2024
+          const yearNum = parseInt(yearStrRaw, 10);
+          const year = yearStrRaw.length === 2 ? 2000 + yearNum : yearNum; // Handle YY or YYYY
           dailyStartDate = moment([year, monthIndex]).startOf('month');
           dailyEndDate = moment([year, monthIndex]).endOf('month');
           console.log(`[fetchTrafficData] Using selected month: ${selectedMonth}, date range: ${dailyStartDate.format('YYYY-MM-DD')} to ${dailyEndDate.format('YYYY-MM-DD')}`);
@@ -2690,8 +2693,7 @@ export class AnalyticsService {
           });
 
           console.log(
-            `Computed monthly metrics for keyword "${
-              keyword.keyword
+            `Computed monthly metrics for keyword "${keyword.keyword
             }" in ${month}/${year}: position ${monthlyPosition.toFixed(
               2
             )}, page: ${topPageUrl}`
