@@ -70,9 +70,9 @@ export const contentGenerationRouter = router({
       id: z.string().min(1, 'Generated content ID is required'),
       updates: z.object({
         articleContent: z.array(z.object({
-          heading_type: z.enum(['H1', 'H2', 'H3']),
-          heading_text: z.string(),
-          body_text: z.string()
+          headingType: z.enum(['h1', 'h2', 'h3']),
+          headingText: z.string(),
+          bodyText: z.string()
         })).optional(),
         style: z.string().optional(),
         intro: z.string().optional(),

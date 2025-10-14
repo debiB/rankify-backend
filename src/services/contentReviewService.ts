@@ -1,6 +1,7 @@
 import { prisma } from '../utils/prisma';
 import { contentGenerationService } from './contentGenerationService';
 import { GeneratedContentWithRelations } from './contentGenerationService';
+import { brandService } from './brandService';
 
 export interface ReviewResult {
   readabilityScore: number;
@@ -35,13 +36,14 @@ export class ContentReviewService {
     }
     
     return articleContent.map(block => {
-      const headingPrefix = block.heading_type === 'H1' ? '# ' : 
-                           block.heading_type === 'H2' ? '## ' : 
-                           block.heading_type === 'H3' ? '### ' : '';
-      
-      const headingText = block.heading_text ? `${headingPrefix}${block.heading_text}\n` : '';
-      const bodyText = block.body_text ? `${block.body_text}` : '';
-      
+      const type = (block.headingType ?? block.heading_type ?? '').toString().toLowerCase();
+      const headingPrefix = type === 'h1' ? '# ' : type === 'h2' ? '## ' : type === 'h3' ? '### ' : '';
+      const headingText = (block.headingText ?? block.heading_text ?? '')
+        ? `${headingPrefix}${(block.headingText ?? block.heading_text).toString()}\n`
+        : '';
+      const bodyText = (block.bodyText ?? block.body_text ?? '')
+        ? `${(block.bodyText ?? block.body_text).toString()}`
+        : '';
       return `${headingText}${bodyText}`;
     }).join('\n\n');
   }
@@ -63,16 +65,16 @@ export class ContentReviewService {
       const readabilityScore = this.checkReadability(plainTextContent);
       const seoAnalysis = this.analyzeSEO(content);
       const coherenceScore = this.checkCoherence(plainTextContent);
-      const keywordDensity = this.calculateKeywordDensity(content);
-      const headingHierarchy = this.checkHeadingHierarchy(plainTextContent, content.contentPlan);
+      const keywordDensity = this.calculateKeywordDensity(plainTextContent, content);
+      const headingHierarchy = this.checkHeadingHierarchy(plainTextContent, content.contentPlan, content.articleContent);
       const linkAnalysis = this.analyzeLinks(plainTextContent, content.externalLink);
-      const metaTags = this.generateMetaTags(content);
+      const metaTags = this.generateMetaTagsFromText(plainTextContent);
       const firstPersonUsage = this.checkFirstPersonUsage(plainTextContent);
       const callToAction = this.checkCallToAction(plainTextContent);
       
       // New enhanced checks
       const naturalnessScore = this.checkNaturalness(plainTextContent);
-      const brandVoiceAlignment = await this.checkBrandVoiceAlignment(content);
+      const brandVoiceAlignment = await this.checkBrandVoiceAlignment(plainTextContent, content);
       const understandabilityScore = this.checkUnderstandability(plainTextContent);
       
       // Generate suggestions based on analysis
@@ -286,7 +288,7 @@ export class ContentReviewService {
   /**
    * Calculate keyword density
    */
-  private calculateKeywordDensity(content: any): number {
+  private calculateKeywordDensity(plainText: string, content: any): number {
     try {
       // Get the keyword from the content plan
       const contentPlan = content.contentPlan;
@@ -295,7 +297,7 @@ export class ContentReviewService {
       }
       
       const keyword = contentPlan.keywordAnalysis.keyword.toLowerCase();
-      const articleText = content.articleText.toLowerCase();
+      const articleText = (plainText || '').toLowerCase();
       
       // Count keyword occurrences
       const keywordMatches = (articleText.match(new RegExp(`\\b${keyword}\\b`, 'g')) || []).length;
@@ -314,19 +316,37 @@ export class ContentReviewService {
   /**
    * Check heading hierarchy compliance using structured content blocks
    */
-  private checkHeadingHierarchy(articleText: string, contentPlan?: any): { valid: boolean; issues: string[] } {
+  private checkHeadingHierarchy(articleText: string, contentPlan?: any, articleContent?: any[]): { valid: boolean; issues: string[] } {
     const issues: string[] = [];
     
-    // Parse article text into structured blocks to analyze heading hierarchy
-    const contentBlocks = contentGenerationService['parseArticleTextToBlocks'](articleText);
-    
-    // Extract headings from content blocks
+    // Extract headings from structured content blocks first (most reliable)
     let headings: Array<{ level: number; text: string }> = [];
     
-    for (const block of contentBlocks) {
-      if (block.heading_type && block.heading_text) {
-        const level = block.heading_type === 'H1' ? 1 : block.heading_type === 'H2' ? 2 : 3;
-        headings.push({ level, text: block.heading_text });
+    // If we have structured articleContent, use it directly
+    if (articleContent && Array.isArray(articleContent) && articleContent.length > 0) {
+      for (const block of articleContent) {
+        const type = (block as any).headingType ?? (block as any).heading_type;
+        const text = (block as any).headingText ?? (block as any).heading_text;
+        if (type && text) {
+          const t = String(type).toLowerCase();
+          const level = t === 'h1' ? 1 : t === 'h2' ? 2 : 3;
+          headings.push({ level, text: String(text) });
+        }
+      }
+    }
+    
+    // Fallback: Parse article text into structured blocks if no structured content provided
+    if (headings.length === 0) {
+      const contentBlocks = contentGenerationService['parseArticleTextToBlocks'](articleText);
+      
+      for (const block of contentBlocks) {
+        const type = (block as any).headingType ?? (block as any).heading_type;
+        const text = (block as any).headingText ?? (block as any).heading_text;
+        if (type && text) {
+          const t = String(type).toLowerCase();
+          const level = t === 'h1' ? 1 : t === 'h2' ? 2 : 3;
+          headings.push({ level, text: String(text) });
+        }
       }
     }
     
@@ -469,12 +489,10 @@ export class ContentReviewService {
   /**
    * Generate meta title and description
    */
-  private generateMetaTags(content: any): { title: string; description: string } {
+  private generateMetaTagsFromText(articleText: string): { title: string; description: string } {
     // Extract H1 for meta title
-    let h1Match = null;
-    
-    // First, try to find H1 in the new format
-    const lines = content.articleText.split('\n');
+    let h1Match: string | null = null;
+    const lines = (articleText || '').split('\n');
     for (const line of lines) {
       const trimmedLine = line.trim();
       if (trimmedLine.startsWith('Heading1:')) {
@@ -485,51 +503,29 @@ export class ContentReviewService {
     
     // If not found in new format, try HTML format as fallback
     if (!h1Match) {
-      const h1HtmlMatch = content.articleText.match(/<h1[^>]*>(.*?)<\/h1>/i);
+      const h1HtmlMatch = (articleText || '').match(/<h1[^>]*>(.*?)<\/h1>/i);
       h1Match = h1HtmlMatch ? h1HtmlMatch[1] : null;
     }
     
     let title = h1Match ? h1Match.substring(0, 55) : 'Article';
+    if (title.length > 60) title = title.substring(0, 57) + '...';
     
-    // Ensure title is within 60 characters
-    if (title.length > 60) {
-      title = title.substring(0, 57) + '...';
-    }
-    
-    // Extract first paragraph for meta description
-    let firstParagraph = null;
-    
-    // Try to find first paragraph in new format (first line that's not a heading)
+    // First non-heading line as description
+    let firstParagraph: string | null = null;
     for (const line of lines) {
       const trimmedLine = line.trim();
-      if (trimmedLine && 
-          !trimmedLine.startsWith('Heading1:') && 
-          !trimmedLine.startsWith('H2:') && 
-          !trimmedLine.startsWith('H3:')) {
+      if (trimmedLine && !trimmedLine.startsWith('Heading1:') && !trimmedLine.startsWith('H2:') && !trimmedLine.startsWith('H3:')) {
         firstParagraph = trimmedLine;
         break;
       }
     }
-    
-    // If not found in new format, try HTML format as fallback
     if (!firstParagraph) {
-      const firstParagraphMatch = content.articleText.match(/<p[^>]*>(.*?)<\/p>/i);
+      const firstParagraphMatch = (articleText || '').match(/<p[^>]*>(.*?)<\/p>/i);
       firstParagraph = firstParagraphMatch ? firstParagraphMatch[1].replace(/<[^>]*>/g, '') : null;
     }
-    
-    let description = firstParagraph 
-      ? firstParagraph.substring(0, 150) 
-      : 'Learn more in this comprehensive article.';
-    
-    // Ensure description is within 155 characters
-    if (description.length > 155) {
-      description = description.substring(0, 152) + '...';
-    }
-    
-    return {
-      title,
-      description
-    };
+    let description = firstParagraph ? firstParagraph.substring(0, 150) : 'Learn more in this comprehensive article.';
+    if (description.length > 155) description = description.substring(0, 152) + '...';
+    return { title, description };
   }
   
   /**
@@ -623,7 +619,7 @@ export class ContentReviewService {
   /**
    * Check if content maintains brand voice and style
    */
-  private async checkBrandVoiceAlignment(content: any): Promise<number> {
+  private async checkBrandVoiceAlignment(articleText: string, content: any): Promise<number> {
     try {
       // If no brand profile, return neutral score
       if (!content.contentPlan?.brandProfileId) {
@@ -631,9 +627,7 @@ export class ContentReviewService {
       }
       
       // Get brand tone data
-      const brandProfile = await prisma.brandProfile.findUnique({
-        where: { id: content.contentPlan.brandProfileId }
-      });
+      const brandProfile = await brandService.getBrandProfile(content.contentPlan.brandProfileId);
       
       if (!brandProfile?.toneData) {
         return 75; // Neutral score when no brand tone data available
@@ -653,14 +647,14 @@ export class ContentReviewService {
       let score = 100;
       
       // Check sentence length alignment
-      const sentences = content.articleText.split(/[.!?]+/).filter((s: string) => s.trim().length > 0);
+      const sentences = (articleText || '').split(/[.!?]+/).filter((s: string) => s.trim().length > 0);
       
       // Avoid division by zero
       if (sentences.length === 0) {
         return 75; // Neutral score for empty content
       }
       
-      const words = content.articleText.split(/\s+/).filter((w: string) => w.trim().length > 0);
+      const words = (articleText || '').split(/\s+/).filter((w: string) => w.trim().length > 0);
       const avgSentenceLength = words.length / sentences.length;
       
       // Adjust based on brand's preferred sentence length
@@ -671,7 +665,7 @@ export class ContentReviewService {
       }
       
       // Check first person usage alignment
-      const hasFirstPerson = this.checkFirstPersonUsage(content.articleText);
+      const hasFirstPerson = this.checkFirstPersonUsage(articleText || '');
       if (brandToneData.style?.firstPersonUsage && !hasFirstPerson) {
         score -= 10;
       } else if (!brandToneData.style?.firstPersonUsage && hasFirstPerson) {
@@ -679,7 +673,7 @@ export class ContentReviewService {
       }
       
       // Check tone keywords alignment
-      const textLower = content.articleText.toLowerCase();
+      const textLower = (articleText || '').toLowerCase();
       const brandToneKeywords = Array.isArray(brandToneData.tone) 
         ? brandToneData.tone.map((tone: string) => tone.toLowerCase())
         : [];

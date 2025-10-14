@@ -4,11 +4,11 @@ import { contentPlanService } from './contentPlanService';
 import { brandService } from './brandService';
 import { keywordAnalysisService } from './keywordAnalysisService';
 
-// Types for content blocks
+// Types for content blocks (new JSON structure)
 export interface ContentBlock {
-  heading_type: 'H1' | 'H2' | 'H3';
-  heading_text: string;
-  body_text: string;
+  headingType: 'h1' | 'h2' | 'h3';
+  headingText: string;
+  bodyText: string;
 }
 
 // Types for our generated content
@@ -129,10 +129,22 @@ export class ContentGenerationService {
       
       try {
         if (generatedContent.articleContent) {
-          articleContent = JSON.parse(String(generatedContent.articleContent));
-        } else if (generatedContent.articleText) {
-          // Fallback to articleText if articleContent is not available
-          articleContent = this.parseArticleTextToBlocks(generatedContent.articleText);
+          const raw = JSON.parse(String(generatedContent.articleContent));
+          if (Array.isArray(raw)) {
+            articleContent = raw.map((b: any) => {
+              const type = (b.headingType ?? b.heading_type ?? '').toString().toLowerCase();
+              return {
+                headingType: (['h1','h2','h3'].includes(type) ? type : 'h2') as 'h1'|'h2'|'h3',
+                headingText: (b.headingText ?? b.heading_text ?? '').toString(),
+                bodyText: (b.bodyText ?? b.body_text ?? '').toString(),
+              };
+            });
+          } else {
+            articleContent = [];
+          }
+        } else if ((generatedContent as any).articleText) {
+          // Legacy fallback: parse old articleText into blocks
+          articleContent = this.parseArticleTextToBlocks((generatedContent as any).articleText);
         }
       } catch (e) {
         console.error('Error parsing articleContent:', e);
@@ -170,17 +182,26 @@ export class ContentGenerationService {
         data: { finalized: true }
       });
       
-      // Parse article text into structured content blocks
-      const articleContent = this.parseArticleTextToBlocks(generatedContent.articleText);
+      // Ensure articleContent is parsed to new structure
+      let articleContent: ContentBlock[] = [];
+      try {
+        if (generatedContent.articleContent) {
+          const raw = JSON.parse(String(generatedContent.articleContent));
+          articleContent = Array.isArray(raw) ? raw.map((b: any) => ({
+            headingType: (String(b.headingType ?? b.heading_type ?? 'h2').toLowerCase()) as 'h1'|'h2'|'h3',
+            headingText: String(b.headingText ?? b.heading_text ?? ''),
+            bodyText: String(b.bodyText ?? b.body_text ?? ''),
+          })) : [];
+        }
+      } catch {}
       
       return {
         id: generatedContent.id,
         contentPlanId: generatedContent.contentPlanId,
-        articleText: generatedContent.articleText,
-        articleContent, // Add structured format
-        style: generatedContent.style,
-        intro: generatedContent.intro,
-        qnaSections: JSON.parse(generatedContent.qnaSections as string),
+        articleContent,
+        style: generatedContent.style || '',
+        intro: generatedContent.intro || '',
+        qnaSections: (() => { try { return JSON.parse(String(generatedContent.qnaSections)); } catch { return []; } })(),
         externalLink: generatedContent.externalLink,
         finalized: generatedContent.finalized,
         createdAt: generatedContent.createdAt,
@@ -248,11 +269,26 @@ export class ContentGenerationService {
       // Create a prompt for Gemini based on all the inputs
       const prompt = this.createGeminiPrompt(contentPlan, keywordAnalysis, brandToneData, style, language);
       
+      console.log('=== GENERATING CONTENT WITH GEMINI ===');
+      console.log('Prompt:', prompt.substring(0, 500) + '...');
+      
       // Generate content with Gemini using the public method
       const text = await geminiService.generateContent(prompt);
       
+      console.log('=== GEMINI RESPONSE ===');
+      console.log('Response length:', text.length);
+      console.log('Response preview:', text.substring(0, 500));
+      
       // Parse the response to extract structured content
-      return this.parseGeminiResponse(text, contentPlan, keywordAnalysis);
+      const parsed = this.parseGeminiResponse(text, contentPlan, keywordAnalysis);
+      
+      console.log('=== PARSED CONTENT ===');
+      console.log('Intro length:', parsed.intro?.length || 0);
+      console.log('Article blocks:', parsed.articleContent?.length || 0);
+      console.log('Q&A sections:', parsed.qnaSections?.length || 0);
+      console.log('External link:', parsed.externalLink);
+      
+      return parsed;
     } catch (error) {
       console.error('Error generating article with Gemini:', error);
       throw new Error(`Failed to generate article content with AI: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -345,86 +381,42 @@ export class ContentGenerationService {
     const languageName = languageMap[language] || 'Hebrew'; // Default to Hebrew if not found
     
     return `
-      You are an expert content writer. Write a comprehensive article in ${languageName} based on the following requirements:
+      You are an expert content writer. Produce a complete article in ${languageName} following these inputs and constraints.
       
       Topic: ${keywordAnalysis.keyword}
       Article Goal: ${contentPlan.articleGoal}
-      
       Style: ${style} (${styleDescriptions[style]})
       
       Brand Guidelines:
       ${brandToneDescription}
       
       Content Structure Requirements:
-      - Word Count Target: ${contentPlan.recommendedWordCount} words (between 600-1500 words)
+      - Target length: ${contentPlan.recommendedWordCount} words (acceptable range 600-1500)
       - Main Headlines (H1): ${contentPlan.headlines.join(', ')}
       - Subheadings (H2/H3): ${contentPlan.subheadings.join(', ')}
-      
-      Keyword Placement Rules:
+      - Keyword Placement Rules:
       ${keywordGuidelines}
+      - ${qaSection}
+      - External Link: ${keywordAnalysis.recommendedExternalLink || 'Include one relevant external link contextually'}
       
-      ${qaSection}
+      OUTPUT FORMAT (STRICT):
+      - Return ONLY a single JSON object. No prose, no markdown, no extra text.
+      - The JSON shape MUST be exactly:
+      {
+        "intro": "string",
+        "articleContent": [
+          { "headingType": "h1"|"h2"|"h3", "headingText": "string", "bodyText": "string" }
+        ],
+        "qnaSections": ["string"],
+        "externalLink": "string|null"
+      }
       
-      External Link: ${keywordAnalysis.recommendedExternalLink || 'Include one relevant external link contextually'}
-      
-      ========== CRITICAL FORMATTING RULES - YOU MUST FOLLOW THIS EXACTLY ==========
-      
-      HEADING FORMAT - USE PIPE DELIMITERS:
-      |HEADING1| [your heading text here] |END|
-      |H2| [your subheading text here] |END|
-      |H3| [your sub-subheading text here] |END|
-      
-      COMPLETE EXAMPLE OF CORRECT FORMAT:
-      
-      |HEADING1| Web Crawler: Your Complete Guide |END|
-      
-      Web crawlers are automated programs that browse the internet. They help search engines index content.
-      
-      |H2| What is a Web Crawler? |END|
-      
-      A web crawler is a bot that systematically browses the World Wide Web.
-      
-      |H3| How It Works |END|
-      
-      The crawler starts with seed URLs and follows links to discover new pages.
-      
-      MANDATORY RULES:
-      1. ALWAYS use pipe delimiters: |HEADING1| text |END| or |H2| text |END| or |H3| text |END|
-      2. Put heading on its own line
-      3. Put body text on separate lines AFTER the heading
-      4. NO markdown formatting (no *, no _, no #)
-      5. NO Q&A sections in article text (handled separately)
-      6. NO External Links sections in article text (handled separately)
-      
-      DO NOT write headings like this: "Heading1: text Body text continues..."
-      ALWAYS write headings like this: "|HEADING1| text |END|" then body text on next line
-      
-      Specific Requirements:
-      1. Intro section should clearly state the purpose and desired outcome
-      2. Follow the approved headline hierarchy (H1/H2/H3)
-      3. Include Q&A sections where applicable
-      4. Embed one external link contextually
-      5. Include the keyword per placement rules
-      6. Word count should be between 600-1500 words
-      7. Write in the specified style: ${style}
-      
-      Please format your response as follows:
-      
-      INTRO_START
-      [Write the introduction here - clearly stating purpose and desired outcome]
-      INTRO_END
-      
-      ARTICLE_TEXT_START
-      [Write the complete article text here with proper H1/H2/H3 headings as plain text using the specified format]
-      ARTICLE_TEXT_END
-      
-      QNA_SECTIONS_START
-      [List Q&A sections separated by "---"]
-      QNA_SECTIONS_END
-      
-      EXTERNAL_LINK_START
-      [Provide the external link URL]
-      EXTERNAL_LINK_END
+      Rules:
+      - headingType values must be lowercase: "h1", "h2", or "h3".
+      - headingText and bodyText must not contain markdown (#, *, _, ~~) or HTML tags.
+      - Maintain logical heading hierarchy (start with one h1, followed by h2/h3).
+      - Ensure articleContent fully represents the article body; do not include Q&A or External Links there.
+      - Ensure the JSON is valid and parseable.
     `;
   }
   
@@ -535,71 +527,57 @@ export class ContentGenerationService {
     keywordAnalysis: any
   ): Omit<GeneratedContentData, 'contentPlanId' | 'finalized'> {
     try {
-      // Extract intro section
-      const introMatch = response.match(/INTRO_START\s*([\s\S]*?)\s*INTRO_END/);
-      let intro = introMatch ? introMatch[1].trim() : '';
-      // Clean intro but preserve line breaks
-      intro = intro.replace(/\*\*/g, '').replace(/\*/g, '').replace(/__/g, '').replace(/_/g, '');
+      // Try to extract JSON from response if it's wrapped in markdown code blocks
+      let jsonString = response.trim();
       
-      // Extract article text
-      const articleMatch = response.match(/ARTICLE_TEXT_START\s*([\s\S]*?)\s*ARTICLE_TEXT_END/);
-      let articleText = articleMatch ? articleMatch[1].trim() : '';
-      
-      // Clean article text but preserve line structure
-      articleText = articleText
-        .replace(/\*\*/g, '') // Remove double asterisks
-        .replace(/\*/g, '') // Remove single asterisks
-        .replace(/__/g, '') // Remove double underscores
-        .replace(/_/g, '') // Remove single underscores
-        .replace(/#{1,6}\s*/g, '') // Remove markdown headers
-        .replace(/~~/g, '') // Remove strikethrough
-        .replace(/`/g, ''); // Remove backticks
-      
-      // Parse headings and ensure they're on separate lines
-      // First check if AI used pipe delimiters
-      if (articleText.includes('|HEADING1|') || articleText.includes('|H2|') || articleText.includes('|H3|')) {
-        articleText = articleText
-          .replace(/\|HEADING1\|\s*([^|]+?)\s*\|END\|\s*/g, '\nHeading1: $1\n')
-          .replace(/\|H2\|\s*([^|]+?)\s*\|END\|\s*/g, '\nH2: $1\n')
-          .replace(/\|H3\|\s*([^|]+?)\s*\|END\|\s*/g, '\nH3: $1\n')
-          .trim();
-      } else {
-        // AI didn't use delimiters - force line breaks
-        // Simply replace the heading markers with newlines before and after
-        articleText = articleText
-          .replace(/(^|\s)(Heading1:)/g, '\n\n$2')
-          .replace(/(^|\s)(H2:)/g, '\n\n$2')
-          .replace(/(^|\s)(H3:)/g, '\n\n$2')
-          // After each heading, look for where it ends (period, question mark, or exclamation)
-          // and add a line break after it
-          .replace(/(Heading1:[^.!?\n]+[.!?])\s+/g, '$1\n\n')
-          .replace(/(H2:[^.!?\n]+[.!?])\s+/g, '$1\n\n')
-          .replace(/(H3:[^.!?\n]+[.!?])\s+/g, '$1\n\n')
-          .trim();
+      // Remove markdown code blocks if present
+      if (jsonString.startsWith('```json')) {
+        jsonString = jsonString.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+      } else if (jsonString.startsWith('```')) {
+        jsonString = jsonString.replace(/^```\s*/, '').replace(/\s*```$/, '');
       }
       
-      // Extract Q&A sections
-      const qnaMatch = response.match(/QNA_SECTIONS_START\s*([\s\S]*?)\s*QNA_SECTIONS_END/);
+      console.log('Attempting to parse JSON, length:', jsonString.length);
+      
+      // Prefer strict JSON response path
+      const parsed = JSON.parse(jsonString);
+      let intro = '';
       let qnaSections: string[] = [];
-      
-      if (qnaMatch) {
-        const qnaContent = qnaMatch[1].trim();
-        qnaSections = qnaContent.split('---').map(section => {
-          // Clean Q&A but preserve line breaks
-          return section.trim().replace(/\*\*/g, '').replace(/\*/g, '').replace(/__/g, '').replace(/_/g, '');
-        }).filter(section => section.length > 0);
+      let externalLink: string | null = keywordAnalysis.recommendedExternalLink || null;
+      let articleContent: ContentBlock[] = [];
+
+      if (Array.isArray(parsed)) {
+        // Backward-compat: model returned just the array of blocks
+        articleContent = parsed as any[];
+      } else if (parsed && typeof parsed === 'object') {
+        intro = typeof parsed.intro === 'string' ? parsed.intro : '';
+        if (Array.isArray(parsed.qnaSections)) {
+          qnaSections = parsed.qnaSections.filter((s: any) => typeof s === 'string');
+        }
+        if (typeof parsed.externalLink === 'string') {
+          externalLink = parsed.externalLink;
+        } else if (parsed.externalLink === null) {
+          externalLink = null;
+        }
+        if (Array.isArray(parsed.articleContent)) {
+          articleContent = parsed.articleContent as any[];
+        }
       }
-      
-      // Remove Q&A and External Links sections from article text to avoid duplication
-      articleText = this.removeQnaAndLinksFromArticleText(articleText, qnaSections);
-      
-      // Extract external link
-      const linkMatch = response.match(/EXTERNAL_LINK_START\s*([\s\S]*?)\s*EXTERNAL_LINK_END/);
-      const externalLink = linkMatch ? linkMatch[1].trim() : keywordAnalysis.recommendedExternalLink || null;
-      
-      // Parse article text into structured content blocks
-      const articleContent = this.parseArticleTextToBlocks(articleText);
-      
+
+      // Normalize blocks and sanitize
+      articleContent = (articleContent || []).map((b: any) => {
+        const ht = (b.headingType ?? b.heading_type ?? '').toString().toLowerCase();
+        const hx = (b.headingText ?? b.heading_text ?? '').toString()
+          .replace(/[#*_~`]/g, '');
+        const bt = (b.bodyText ?? b.body_text ?? '').toString()
+          .replace(/[#*_~`]/g, '');
+        return {
+          headingType: (['h1','h2','h3'].includes(ht) ? ht : 'h2') as 'h1'|'h2'|'h3',
+          headingText: hx,
+          bodyText: bt,
+        };
+      });
+
       return {
         articleContent,
         style: contentPlan.style,
@@ -607,9 +585,46 @@ export class ContentGenerationService {
         qnaSections,
         externalLink
       };
-    } catch (error) {
-      console.error('Error parsing Gemini response:', error);
-      throw new Error('Failed to parse AI-generated content');
+    } catch (jsonError) {
+      // Fallback to legacy delimiter parsing if model didn't return JSON
+      try {
+        // Extract intro section
+        const introMatch = response.match(/INTRO_START\s*([\s\S]*?)\s*INTRO_END/);
+        let intro = introMatch ? introMatch[1].trim() : '';
+        intro = intro.replace(/\*\*/g, '').replace(/\*/g, '').replace(/__/g, '').replace(/_/g, '');
+        
+        // Extract article text
+        const articleMatch = response.match(/ARTICLE_TEXT_START\s*([\s\S]*?)\s*ARTICLE_TEXT_END/);
+        let articleText = articleMatch ? articleMatch[1].trim() : '';
+        articleText = articleText
+          .replace(/\*\*/g, '')
+          .replace(/\*/g, '')
+          .replace(/__/g, '')
+          .replace(/_/g, '')
+          .replace(/#{1,6}\s*/g, '')
+          .replace(/~~/g, '')
+          .replace(/`/g, '');
+        
+        // Q&A
+        const qnaMatch = response.match(/QNA_SECTIONS_START\s*([\s\S]*?)\s*QNA_SECTIONS_END/);
+        let qnaSections: string[] = [];
+        if (qnaMatch) {
+          const qnaContent = qnaMatch[1].trim();
+          qnaSections = qnaContent.split('---').map(section => section.trim()).filter(Boolean);
+        }
+        
+        // Link
+        const linkMatch = response.match(/EXTERNAL_LINK_START\s*([\s\S]*?)\s*EXTERNAL_LINK_END/);
+        const externalLink = linkMatch ? linkMatch[1].trim() : keywordAnalysis.recommendedExternalLink || null;
+        
+        // Parse into blocks
+        const articleContent = this.parseArticleTextToBlocks(articleText);
+        
+        return { articleContent, style: contentPlan.style, intro, qnaSections, externalLink };
+      } catch (fallbackError) {
+        console.error('Error parsing Gemini response (fallback):', fallbackError);
+        throw new Error('Failed to parse AI-generated content');
+      }
     }
   }
 
@@ -624,12 +639,12 @@ export class ContentGenerationService {
     }
     
     return articleContent.map(block => {
-      const headingPrefix = block.heading_type === 'H1' ? 'Heading1: ' : 
-                           block.heading_type === 'H2' ? 'H2: ' : 
-                           block.heading_type === 'H3' ? 'H3: ' : '';
+      const headingPrefix = block.headingType === 'h1' ? 'Heading1: ' : 
+                           block.headingType === 'h2' ? 'H2: ' : 
+                           block.headingType === 'h3' ? 'H3: ' : '';
       
-      const headingText = block.heading_text ? `${headingPrefix}${block.heading_text}\n` : '';
-      const bodyText = block.body_text ? `${block.body_text}` : '';
+      const headingText = block.headingText ? `${headingPrefix}${block.headingText}\n` : '';
+      const bodyText = block.bodyText ? `${block.bodyText}` : '';
       
       return `${headingText}${bodyText}`;
     }).join('\n\n');
@@ -646,7 +661,7 @@ export class ContentGenerationService {
     const blocks: ContentBlock[] = [];
     const lines = articleText.split('\n');
     
-    let currentHeadingType: 'H1' | 'H2' | 'H3' = 'H1';
+    let currentHeadingType: 'h1' | 'h2' | 'h3' = 'h1';
     let currentHeadingText = '';
     let bodyLines: string[] = [];
 
@@ -658,21 +673,21 @@ export class ContentGenerationService {
         // Save previous block if exists
         if (currentHeadingText && bodyLines.length > 0) {
           blocks.push({
-            heading_type: currentHeadingType,
-            heading_text: currentHeadingText,
-            body_text: bodyLines.join('\n').trim()
+            headingType: currentHeadingType,
+            headingText: currentHeadingText,
+            bodyText: bodyLines.join('\n').trim()
           });
         }
         
         // Start new block based on heading type
         if (line.startsWith('Heading1:')) {
-          currentHeadingType = 'H1';
+          currentHeadingType = 'h1';
           currentHeadingText = line.substring(9).trim();
         } else if (line.startsWith('H2:')) {
-          currentHeadingType = 'H2';
+          currentHeadingType = 'h2';
           currentHeadingText = line.substring(3).trim();
         } else if (line.startsWith('H3:')) {
-          currentHeadingType = 'H3';
+          currentHeadingType = 'h3';
           currentHeadingText = line.substring(3).trim();
         }
         bodyLines = [];
@@ -688,18 +703,18 @@ export class ContentGenerationService {
     // Save final block
     if (currentHeadingText && bodyLines.length > 0) {
       blocks.push({
-        heading_type: currentHeadingType,
-        heading_text: currentHeadingText,
-        body_text: bodyLines.join('\n').trim()
+        headingType: currentHeadingType,
+        headingText: currentHeadingText,
+        bodyText: bodyLines.join('\n').trim()
       });
     }
 
     // Handle case where there's body text before any heading
     if (blocks.length === 0 && bodyLines.length > 0) {
       blocks.push({
-        heading_type: 'H1',
-        heading_text: 'Introduction',
-        body_text: bodyLines.join('\n').trim()
+        headingType: 'h1',
+        headingText: 'Introduction',
+        bodyText: bodyLines.join('\n').trim()
       });
     }
 

@@ -558,7 +558,7 @@ model ContentPlan {
   subheadings          Json // JSON array of strings
   recommendedWordCount Int
   keywordPlacement     Json // JSON array of strings
-  style                String
+  style                String @db.Text
   adminApproved        Boolean @default(false)
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt

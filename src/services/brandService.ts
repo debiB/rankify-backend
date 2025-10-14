@@ -77,16 +77,31 @@ export class BrandService {
   }
 
   /**
-   * Get all brand profiles
+   * Get all brand profiles - returns only the latest profile per brand name
    */
   async getAllBrandProfiles() {
-    return await prisma.brandProfile.findMany({
+    // Get all brand profiles ordered by name and lastUpdated
+    const allProfiles = await prisma.brandProfile.findMany({
       include: {
         urls: true,
         pdfs: true,
         otherDocs: true
-      }
+      },
+      orderBy: [
+        { name: 'asc' },
+        { lastUpdated: 'desc' }
+      ]
     });
+    
+    // Filter to get only the latest profile per brand name
+    const distinctBrands = new Map();
+    for (const profile of allProfiles) {
+      if (!distinctBrands.has(profile.name)) {
+        distinctBrands.set(profile.name, profile);
+      }
+    }
+    
+    return Array.from(distinctBrands.values());
   }
 
   /**
