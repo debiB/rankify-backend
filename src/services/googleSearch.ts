@@ -79,8 +79,6 @@ export class GoogleSearchService {
         num: 10 // Number of results to return
       });
 
-      console.log('Google Search API Response:', JSON.stringify(response.data, null, 2));
-
       if (!response.data.items || response.data.items.length === 0) {
         console.log('No items found in Google Search response');
         return null;

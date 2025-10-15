@@ -106,7 +106,14 @@ export class ContentGenerationService {
   async getGeneratedContentById(id: string): Promise<GeneratedContent> {
     try {
       const generatedContent = await prisma.generatedContent.findUnique({
-        where: { id }
+        where: { id },
+        include: {
+          contentPlan: {
+            include: {
+              keywordAnalysis: true
+            }
+          }
+        }
       });
       
       if (!generatedContent) {
@@ -151,7 +158,7 @@ export class ContentGenerationService {
         articleContent = [];
       }
 
-      // Return only the fields defined in the GeneratedContent interface
+      // Return the content with relations
       return {
         id: generatedContent.id,
         contentPlanId: generatedContent.contentPlanId,
@@ -162,8 +169,9 @@ export class ContentGenerationService {
         externalLink: generatedContent.externalLink,
         finalized: generatedContent.finalized,
         createdAt: generatedContent.createdAt,
-        updatedAt: generatedContent.updatedAt
-      };
+        updatedAt: generatedContent.updatedAt,
+        contentPlan: generatedContent.contentPlan
+      } as any;
     } catch (error) {
       console.error('Error retrieving generated content:', error);
       throw new Error(`Failed to retrieve generated content: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -269,24 +277,16 @@ export class ContentGenerationService {
       // Create a prompt for Gemini based on all the inputs
       const prompt = this.createGeminiPrompt(contentPlan, keywordAnalysis, brandToneData, style, language);
       
-      console.log('=== GENERATING CONTENT WITH GEMINI ===');
-      console.log('Prompt:', prompt.substring(0, 500) + '...');
+      
       
       // Generate content with Gemini using the public method
       const text = await geminiService.generateContent(prompt);
       
-      console.log('=== GEMINI RESPONSE ===');
-      console.log('Response length:', text.length);
-      console.log('Response preview:', text.substring(0, 500));
+     
       
       // Parse the response to extract structured content
       const parsed = this.parseGeminiResponse(text, contentPlan, keywordAnalysis);
       
-      console.log('=== PARSED CONTENT ===');
-      console.log('Intro length:', parsed.intro?.length || 0);
-      console.log('Article blocks:', parsed.articleContent?.length || 0);
-      console.log('Q&A sections:', parsed.qnaSections?.length || 0);
-      console.log('External link:', parsed.externalLink);
       
       return parsed;
     } catch (error) {
@@ -295,41 +295,6 @@ export class ContentGenerationService {
     }
   }
 
-  /**
-   * Simulate Gemini response for testing purposes
-   * In a real implementation, this would call the actual Gemini API
-   */
-  private async simulateGeminiResponse(prompt: string): Promise<string> {
-    // This is a placeholder implementation
-    // In a real scenario, you would call geminiService.generateContent(prompt)
-    return `
-      INTRO_START
-      This article provides comprehensive information about the topic, helping readers understand key concepts and best practices.
-      INTRO_END
-      
-      ARTICLE_TEXT_START
-      <h1>Complete Guide to the Topic</h1>
-      <p>This is the main content of the article...</p>
-      <h2>Key Concepts</h2>
-      <p>Important information about the topic...</p>
-      <h3>Subsection Details</h3>
-      <p>More detailed information...</p>
-      ARTICLE_TEXT_END
-      
-      QNA_SECTIONS_START
-      What are the benefits?
-      The benefits include...
-      ---
-      How to get started?
-      To get started, you should...
-      QNA_SECTIONS_END
-      
-      EXTERNAL_LINK_START
-      https://example.com
-      EXTERNAL_LINK_END
-    `;
-  }
-  
   /**
    * Create a detailed prompt for Gemini based on content plan, keyword analysis, brand tone, and style
    */

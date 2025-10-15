@@ -45,12 +45,12 @@ export class KeywordAnalysisService {
    */
   async analyzeKeyword(keyword: string, campaignId?: string): Promise<string> {
     try {
-      console.log(`Analyzing keyword: ${keyword}`);
+     
       
       // Step 1: Fetch data from Google Search instead of GSC
       const searchData = await this.fetchGoogleSearchData(keyword);
       
-      console.log(`Search data received:`, JSON.stringify(searchData, null, 2));
+     
       
       // Step 2: If still no data, throw error
       if (!searchData || searchData.topPages.length === 0) {
@@ -78,12 +78,12 @@ export class KeywordAnalysisService {
    */
   private async fetchGoogleSearchData(keyword: string): Promise<GSCKeywordData | null> {
     try {
-      console.log(`Fetching Google Search data for keyword: ${keyword}`);
+     
       
       // Fetch data from Google Search
       const searchData = await googleSearchService.searchKeyword(keyword);
       
-      console.log(`Google Search data received:`, JSON.stringify(searchData, null, 2));
+   
       
       if (!searchData) {
         console.log(`No Google Search data found for keyword: ${keyword}`);

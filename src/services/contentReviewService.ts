@@ -9,7 +9,6 @@ export interface ReviewResult {
   coherenceScore: number;
   keywordDensity: number;
   hasProperHeadingHierarchy: boolean;
-  hasInternalLinks: boolean;
   hasExternalLinks: boolean;
   metaTitle: string;
   metaDescription: string;
@@ -98,7 +97,6 @@ export class ContentReviewService {
         coherenceScore,
         keywordDensity,
         hasProperHeadingHierarchy: headingHierarchy.valid,
-        hasInternalLinks: linkAnalysis.hasInternalLinks,
         hasExternalLinks: linkAnalysis.hasExternalLinks,
         metaTitle: metaTags.title,
         metaDescription: metaTags.description,
@@ -292,12 +290,21 @@ export class ContentReviewService {
     try {
       // Get the keyword from the content plan
       const contentPlan = content.contentPlan;
-      if (!contentPlan || !contentPlan.keywordAnalysis) {
+      if (!contentPlan) {
+        console.log('Keyword density: No content plan found');
+        return 0;
+      }
+      
+      if (!contentPlan.keywordAnalysis) {
+        console.log('Keyword density: No keyword analysis found in content plan');
         return 0;
       }
       
       const keyword = contentPlan.keywordAnalysis.keyword.toLowerCase();
       const articleText = (plainText || '').toLowerCase();
+      
+      console.log(`Calculating keyword density for keyword: "${keyword}"`);
+      console.log(`Article text length: ${articleText.length} characters`);
       
       // Count keyword occurrences
       const keywordMatches = (articleText.match(new RegExp(`\\b${keyword}\\b`, 'g')) || []).length;
@@ -305,8 +312,13 @@ export class ContentReviewService {
       // Count total words
       const words = articleText.split(/\s+/).filter((w: string) => w.trim().length > 0).length;
       
+      console.log(`Keyword matches: ${keywordMatches}, Total words: ${words}`);
+      
       // Calculate density percentage
-      return words > 0 ? (keywordMatches / words) * 100 : 0;
+      const density = words > 0 ? (keywordMatches / words) * 100 : 0;
+      console.log(`Keyword density: ${density.toFixed(2)}%`);
+      
+      return density;
     } catch (error) {
       console.error('Error calculating keyword density:', error);
       return 0;
@@ -784,7 +796,7 @@ export class ContentReviewService {
     coherenceScore: number;
     keywordDensity: number;
     headingHierarchy: { valid: boolean; issues: string[] };
-    linkAnalysis: { hasInternalLinks: boolean; hasExternalLinks: boolean };
+    linkAnalysis: { hasExternalLinks: boolean };
     firstPersonUsage: boolean;
     callToAction: boolean;
     // New analysis parameters
@@ -822,11 +834,7 @@ export class ContentReviewService {
       suggestions.push(...analysis.headingHierarchy.issues);
     }
     
-    // Link suggestions
-    if (!analysis.linkAnalysis.hasInternalLinks) {
-      suggestions.push('Add internal links to related content');
-    }
-    
+    // Link suggestions (external only)
     if (!analysis.linkAnalysis.hasExternalLinks) {
       suggestions.push('Add external links to authoritative sources');
     }
