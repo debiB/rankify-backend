@@ -666,11 +666,33 @@ export const adminRouter = router({
     .input(
       z.object({
         campaignId: z.string().optional(),
+        month: z.string().optional(), // Format: "Oct 2025" or "10/2025"
       })
     )
     .query(async ({ input }) => {
       try {
-        const { campaignId } = input;
+        const { campaignId, month } = input;
+
+        // Parse month parameter
+        const parseMonth = (m?: string) => {
+          if (!m) {
+            const d = new Date();
+            return { month: d.getMonth() + 1, year: d.getFullYear() };
+          }
+          const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+          const fullMonthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+          const [monthStr, yearStr] = m.split(' ');
+          let monthIdx = monthNames.indexOf(monthStr);
+          if (monthIdx === -1) monthIdx = fullMonthNames.indexOf(monthStr);
+          const yearNum = parseInt(yearStr, 10);
+          const year = yearStr.length === 2 ? 2000 + yearNum : yearNum;
+          return { 
+            month: (monthIdx < 0 ? new Date().getMonth() : monthIdx) + 1, 
+            year: Number.isNaN(year) ? new Date().getFullYear() : year 
+          };
+        };
+
+        const { month: selectedMonth, year: selectedYear } = parseMonth(month);
 
         // If no campaign ID provided, get metrics for all campaigns
         if (!campaignId) {
@@ -688,51 +710,120 @@ export const adminRouter = router({
           let totalRankSum = 0;
           let totalRankCount = 0;
 
+          // Get previous month for comparison
+          const prevMonth = selectedMonth === 1 ? 12 : selectedMonth - 1;
+          const prevYear = selectedMonth === 1 ? selectedYear - 1 : selectedYear;
+
           for (const campaign of campaigns) {
             // Get analytics data for this campaign
             const analytics = await prisma.searchConsoleKeywordAnalytics.findFirst({
               where: { siteUrl: campaign.searchConsoleSite },
-              include: {
-                keywords: {
-                  include: {
-                    dailyStats: {
-                      orderBy: { date: 'desc' },
-                    },
-                  },
-                },
-              },
             });
 
             if (analytics) {
-              totalKeywords += analytics.keywords.length;
+              // Try to get current month keyword data from computed table first
+              let currentMonthData = await prisma.searchConsoleKeywordMonthlyComputed.findMany({
+                where: {
+                  keyword: {
+                    analyticsId: analytics.id
+                  },
+                  month: selectedMonth,
+                  year: selectedYear,
+                },
+              });
 
-              for (const keyword of analytics.keywords) {
-                // Get the latest and previous daily stats for comparison
-                const sortedStats = [...keyword.dailyStats].sort(
-                  (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
-                );
-                
-                const latestStat = sortedStats[0];
-                const previousStat = sortedStats[1];
+              // Fallback to MonthlyStat if MonthlyComputed is empty
+              if (currentMonthData.length === 0) {
+                const monthlyStats = await prisma.searchConsoleKeywordMonthlyStat.findMany({
+                  where: {
+                    keyword: {
+                      analyticsId: analytics.id
+                    },
+                    month: selectedMonth,
+                    year: selectedYear,
+                  },
+                  include: {
+                    keyword: true,
+                  },
+                });
 
-                if (latestStat && previousStat) {
-                  const latestRank = latestStat.averageRank || 0;
-                  const previousRank = previousStat.averageRank || 0;
-                  
+                // Transform MonthlyStat to match MonthlyComputed structure
+                currentMonthData = monthlyStats.map(stat => ({
+                  id: stat.id,
+                  keywordId: stat.keywordId,
+                  month: stat.month,
+                  year: stat.year,
+                  averageRank: stat.averageRank,
+                  impressions: stat.searchVolume,
+                  clicks: 0, // Not available in MonthlyStat
+                  topRankingPageUrl: stat.topRankingPageUrl,
+                  calcWindowDays: 7,
+                  computedAt: stat.createdAt,
+                  updatedAt: stat.updatedAt,
+                  keyword: stat.keyword,
+                }));
+              }
+
+              totalKeywords += currentMonthData.length;
+
+              // Get previous month for comparison
+              const prevMonth = selectedMonth === 1 ? 12 : selectedMonth - 1;
+              const prevYear = selectedMonth === 1 ? selectedYear - 1 : selectedYear;
+
+              // Get previous month data for comparison
+              let previousMonthData = await prisma.searchConsoleKeywordMonthlyComputed.findMany({
+                where: {
+                  keywordId: {
+                    in: currentMonthData.map(k => k.keywordId)
+                  },
+                  month: prevMonth,
+                  year: prevYear,
+                },
+              });
+
+              // Fallback to MonthlyStat for previous month if needed
+              if (previousMonthData.length === 0) {
+                const prevMonthlyStats = await prisma.searchConsoleKeywordMonthlyStat.findMany({
+                  where: {
+                    keywordId: {
+                      in: currentMonthData.map(k => k.keywordId)
+                    },
+                    month: prevMonth,
+                    year: prevYear,
+                  },
+                });
+
+                previousMonthData = prevMonthlyStats.map(stat => ({
+                  id: stat.id,
+                  keywordId: stat.keywordId,
+                  month: stat.month,
+                  year: stat.year,
+                  averageRank: stat.averageRank,
+                  impressions: stat.searchVolume,
+                  clicks: 0,
+                  topRankingPageUrl: stat.topRankingPageUrl,
+                  calcWindowDays: 7,
+                  computedAt: stat.createdAt,
+                  updatedAt: stat.updatedAt,
+                  keyword: undefined,
+                }));
+              }
+
+              // Calculate movement stats
+              for (const current of currentMonthData) {
+                const previous = previousMonthData.find(p => p.keywordId === current.keywordId);
+
+                if (previous && current.averageRank > 0 && previous.averageRank > 0) {
                   // Lower rank number means better position
-                  if (latestRank < previousRank) {
+                  if (current.averageRank < previous.averageRank) {
                     totalImproved++;
-                  } else if (latestRank > previousRank) {
+                  } else if (current.averageRank > previous.averageRank) {
                     totalDropped++;
                   }
-                  
-                  if (latestRank > 0) {
-                    totalRankSum += latestRank;
-                    totalRankCount++;
-                  }
-                } else if (latestStat && latestStat.averageRank && latestStat.averageRank > 0) {
-                  // If we only have one data point, we can't determine improvement/decline
-                  totalRankSum += latestStat.averageRank;
+                }
+                
+                if (current.averageRank > 0) {
+                  totalRankSum += current.averageRank;
                   totalRankCount++;
                 }
               }
@@ -751,6 +842,110 @@ export const adminRouter = router({
             ? parseFloat((totalRankSum / totalRankCount).toFixed(2)) 
             : 0;
 
+          // Calculate previous month's metrics for comparison (2 months ago vs 3 months ago)
+          const prevPrevMonth = prevMonth === 1 ? 12 : prevMonth - 1;
+          const prevPrevYear = prevMonth === 1 ? prevYear - 1 : prevYear;
+          
+          let prevMonthImproved = 0;
+          let prevMonthDropped = 0;
+          let prevMonthTotal = 0;
+
+          for (const campaign of campaigns) {
+            const analytics = await prisma.searchConsoleKeywordAnalytics.findFirst({
+              where: { siteUrl: campaign.searchConsoleSite },
+            });
+
+            if (analytics) {
+              let prevMonthData = await prisma.searchConsoleKeywordMonthlyComputed.findMany({
+                where: {
+                  keyword: { analyticsId: analytics.id },
+                  month: prevMonth,
+                  year: prevYear,
+                },
+              });
+
+              if (prevMonthData.length === 0) {
+                const stats = await prisma.searchConsoleKeywordMonthlyStat.findMany({
+                  where: {
+                    keyword: { analyticsId: analytics.id },
+                    month: prevMonth,
+                    year: prevYear,
+                  },
+                });
+                prevMonthData = stats.map(stat => ({
+                  id: stat.id,
+                  keywordId: stat.keywordId,
+                  month: stat.month,
+                  year: stat.year,
+                  averageRank: stat.averageRank,
+                  impressions: stat.searchVolume,
+                  clicks: 0,
+                  topRankingPageUrl: stat.topRankingPageUrl,
+                  calcWindowDays: 7,
+                  computedAt: stat.createdAt,
+                  updatedAt: stat.updatedAt,
+                  keyword: undefined,
+                }));
+              }
+
+              let prevPrevMonthData = await prisma.searchConsoleKeywordMonthlyComputed.findMany({
+                where: {
+                  keywordId: { in: prevMonthData.map(k => k.keywordId) },
+                  month: prevPrevMonth,
+                  year: prevPrevYear,
+                },
+              });
+
+              if (prevPrevMonthData.length === 0) {
+                const stats = await prisma.searchConsoleKeywordMonthlyStat.findMany({
+                  where: {
+                    keywordId: { in: prevMonthData.map(k => k.keywordId) },
+                    month: prevPrevMonth,
+                    year: prevPrevYear,
+                  },
+                });
+                prevPrevMonthData = stats.map(stat => ({
+                  id: stat.id,
+                  keywordId: stat.keywordId,
+                  month: stat.month,
+                  year: stat.year,
+                  averageRank: stat.averageRank,
+                  impressions: stat.searchVolume,
+                  clicks: 0,
+                  topRankingPageUrl: stat.topRankingPageUrl,
+                  calcWindowDays: 7,
+                  computedAt: stat.createdAt,
+                  updatedAt: stat.updatedAt,
+                  keyword: undefined,
+                }));
+              }
+
+              prevMonthTotal += prevMonthData.length;
+
+              for (const current of prevMonthData) {
+                const previous = prevPrevMonthData.find(p => p.keywordId === current.keywordId);
+                if (previous && current.averageRank > 0 && previous.averageRank > 0) {
+                  if (current.averageRank < previous.averageRank) {
+                    prevMonthImproved++;
+                  } else if (current.averageRank > previous.averageRank) {
+                    prevMonthDropped++;
+                  }
+                }
+              }
+            }
+          }
+
+          const prevMonthImprovedPercentage = prevMonthTotal > 0 
+            ? Math.round((prevMonthImproved / prevMonthTotal) * 100) 
+            : 0;
+          const prevMonthDroppedPercentage = prevMonthTotal > 0 
+            ? Math.round((prevMonthDropped / prevMonthTotal) * 100) 
+            : 0;
+
+          // Calculate change vs previous month
+          const improvedChange = improvedPercentage - prevMonthImprovedPercentage;
+          const droppedChange = droppedPercentage - prevMonthDroppedPercentage;
+
           return {
             success: true,
             data: {
@@ -758,6 +953,8 @@ export const adminRouter = router({
               improvedPercentage,
               droppedPercentage,
               averageRank,
+              improvedChange,
+              droppedChange,
             },
           };
         } else {
@@ -776,15 +973,6 @@ export const adminRouter = router({
           // Get analytics data for this campaign
           const analytics = await prisma.searchConsoleKeywordAnalytics.findFirst({
             where: { siteUrl: campaign.searchConsoleSite },
-            include: {
-              keywords: {
-                include: {
-                  dailyStats: {
-                    orderBy: { date: 'desc' },
-                  },
-                },
-              },
-            },
           });
 
           if (!analytics) {
@@ -795,43 +983,120 @@ export const adminRouter = router({
                 improvedPercentage: 0,
                 droppedPercentage: 0,
                 averageRank: 0,
+                improvedChange: 0,
+                droppedChange: 0,
               },
             };
           }
 
-          const totalKeywords = analytics.keywords.length;
+          // Try to get current month keyword data from computed table first
+          let currentMonthData = await prisma.searchConsoleKeywordMonthlyComputed.findMany({
+            where: {
+              keyword: {
+                analyticsId: analytics.id
+              },
+              month: selectedMonth,
+              year: selectedYear,
+            },
+          });
+
+          // Fallback to MonthlyStat if MonthlyComputed is empty
+          if (currentMonthData.length === 0) {
+            const monthlyStats = await prisma.searchConsoleKeywordMonthlyStat.findMany({
+              where: {
+                keyword: {
+                  analyticsId: analytics.id
+                },
+                month: selectedMonth,
+                year: selectedYear,
+              },
+              include: {
+                keyword: true,
+              },
+            });
+
+            // Transform MonthlyStat to match MonthlyComputed structure
+            currentMonthData = monthlyStats.map(stat => ({
+              id: stat.id,
+              keywordId: stat.keywordId,
+              month: stat.month,
+              year: stat.year,
+              averageRank: stat.averageRank,
+              impressions: stat.searchVolume,
+              clicks: 0, // Not available in MonthlyStat
+              topRankingPageUrl: stat.topRankingPageUrl,
+              calcWindowDays: 7,
+              computedAt: stat.createdAt,
+              updatedAt: stat.updatedAt,
+              keyword: stat.keyword,
+            }));
+          }
+
+          const totalKeywords = currentMonthData.length;
+
+          // Get previous month for comparison
+          const prevMonth = selectedMonth === 1 ? 12 : selectedMonth - 1;
+          const prevYear = selectedMonth === 1 ? selectedYear - 1 : selectedYear;
+
+          // Get previous month data for comparison
+          let previousMonthData = await prisma.searchConsoleKeywordMonthlyComputed.findMany({
+            where: {
+              keywordId: {
+                in: currentMonthData.map(k => k.keywordId)
+              },
+              month: prevMonth,
+              year: prevYear,
+            },
+          });
+
+          // Fallback to MonthlyStat for previous month if needed
+          if (previousMonthData.length === 0) {
+            const prevMonthlyStats = await prisma.searchConsoleKeywordMonthlyStat.findMany({
+              where: {
+                keywordId: {
+                  in: currentMonthData.map(k => k.keywordId)
+                },
+                month: prevMonth,
+                year: prevYear,
+              },
+            });
+
+            previousMonthData = prevMonthlyStats.map(stat => ({
+              id: stat.id,
+              keywordId: stat.keywordId,
+              month: stat.month,
+              year: stat.year,
+              averageRank: stat.averageRank,
+              impressions: stat.searchVolume,
+              clicks: 0,
+              topRankingPageUrl: stat.topRankingPageUrl,
+              calcWindowDays: 7,
+              computedAt: stat.createdAt,
+              updatedAt: stat.updatedAt,
+              keyword: undefined,
+            }));
+          }
+
           let totalImproved = 0;
           let totalDropped = 0;
           let totalRankSum = 0;
           let totalRankCount = 0;
 
-          for (const keyword of analytics.keywords) {
-            // Get the latest and previous daily stats for comparison
-            const sortedStats = [...keyword.dailyStats].sort(
-              (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
-            );
-            
-            const latestStat = sortedStats[0];
-            const previousStat = sortedStats[1];
+          // Calculate movement stats
+          for (const current of currentMonthData) {
+            const previous = previousMonthData.find(p => p.keywordId === current.keywordId);
 
-            if (latestStat && previousStat) {
-              const latestRank = latestStat.averageRank || 0;
-              const previousRank = previousStat.averageRank || 0;
-              
+            if (previous && current.averageRank > 0 && previous.averageRank > 0) {
               // Lower rank number means better position
-              if (latestRank < previousRank) {
+              if (current.averageRank < previous.averageRank) {
                 totalImproved++;
-              } else if (latestRank > previousRank) {
+              } else if (current.averageRank > previous.averageRank) {
                 totalDropped++;
               }
-              
-              if (latestRank > 0) {
-                totalRankSum += latestRank;
-                totalRankCount++;
-              }
-            } else if (latestStat && latestStat.averageRank && latestStat.averageRank > 0) {
-              // If we only have one data point, we can't determine improvement/decline
-              totalRankSum += latestStat.averageRank;
+            }
+            
+            if (current.averageRank > 0) {
+              totalRankSum += current.averageRank;
               totalRankCount++;
             }
           }
@@ -848,6 +1113,99 @@ export const adminRouter = router({
             ? parseFloat((totalRankSum / totalRankCount).toFixed(2)) 
             : 0;
 
+          // Calculate previous month's metrics for comparison (2 months ago vs 3 months ago)
+          const prevPrevMonth = prevMonth === 1 ? 12 : prevMonth - 1;
+          const prevPrevYear = prevMonth === 1 ? prevYear - 1 : prevYear;
+
+          let prevMonthData = await prisma.searchConsoleKeywordMonthlyComputed.findMany({
+            where: {
+              keyword: { analyticsId: analytics.id },
+              month: prevMonth,
+              year: prevYear,
+            },
+          });
+
+          if (prevMonthData.length === 0) {
+            const stats = await prisma.searchConsoleKeywordMonthlyStat.findMany({
+              where: {
+                keyword: { analyticsId: analytics.id },
+                month: prevMonth,
+                year: prevYear,
+              },
+            });
+            prevMonthData = stats.map(stat => ({
+              id: stat.id,
+              keywordId: stat.keywordId,
+              month: stat.month,
+              year: stat.year,
+              averageRank: stat.averageRank,
+              impressions: stat.searchVolume,
+              clicks: 0,
+              topRankingPageUrl: stat.topRankingPageUrl,
+              calcWindowDays: 7,
+              computedAt: stat.createdAt,
+              updatedAt: stat.updatedAt,
+              keyword: undefined,
+            }));
+          }
+
+          let prevPrevMonthData = await prisma.searchConsoleKeywordMonthlyComputed.findMany({
+            where: {
+              keywordId: { in: prevMonthData.map(k => k.keywordId) },
+              month: prevPrevMonth,
+              year: prevPrevYear,
+            },
+          });
+
+          if (prevPrevMonthData.length === 0) {
+            const stats = await prisma.searchConsoleKeywordMonthlyStat.findMany({
+              where: {
+                keywordId: { in: prevMonthData.map(k => k.keywordId) },
+                month: prevPrevMonth,
+                year: prevPrevYear,
+              },
+            });
+            prevPrevMonthData = stats.map(stat => ({
+              id: stat.id,
+              keywordId: stat.keywordId,
+              month: stat.month,
+              year: stat.year,
+              averageRank: stat.averageRank,
+              impressions: stat.searchVolume,
+              clicks: 0,
+              topRankingPageUrl: stat.topRankingPageUrl,
+              calcWindowDays: 7,
+              computedAt: stat.createdAt,
+              updatedAt: stat.updatedAt,
+              keyword: undefined,
+            }));
+          }
+
+          let prevMonthImproved = 0;
+          let prevMonthDropped = 0;
+
+          for (const current of prevMonthData) {
+            const previous = prevPrevMonthData.find(p => p.keywordId === current.keywordId);
+            if (previous && current.averageRank > 0 && previous.averageRank > 0) {
+              if (current.averageRank < previous.averageRank) {
+                prevMonthImproved++;
+              } else if (current.averageRank > previous.averageRank) {
+                prevMonthDropped++;
+              }
+            }
+          }
+
+          const prevMonthImprovedPercentage = prevMonthData.length > 0 
+            ? Math.round((prevMonthImproved / prevMonthData.length) * 100) 
+            : 0;
+          const prevMonthDroppedPercentage = prevMonthData.length > 0 
+            ? Math.round((prevMonthDropped / prevMonthData.length) * 100) 
+            : 0;
+
+          // Calculate change vs previous month
+          const improvedChange = improvedPercentage - prevMonthImprovedPercentage;
+          const droppedChange = droppedPercentage - prevMonthDroppedPercentage;
+
           return {
             success: true,
             data: {
@@ -855,6 +1213,8 @@ export const adminRouter = router({
               improvedPercentage,
               droppedPercentage,
               averageRank,
+              improvedChange,
+              droppedChange,
             },
           };
         }

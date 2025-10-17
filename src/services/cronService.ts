@@ -3,6 +3,8 @@ import { prisma } from '../utils/prisma';
 import { AnalyticsService } from './analytics';
 import { keywordCannibalizationService } from './keywordCannibalization';
 import { MilestoneService } from './milestoneService';
+import { searchConsoleService } from './searchConsole';
+import moment from 'moment';
 
 const analyticsService = new AnalyticsService();
 const milestoneService = new MilestoneService();
@@ -27,6 +29,7 @@ export class CronService {
     this.setupDailyTrafficJob();
     this.setupCannibalizationAuditJob();
     this.setupDailyMilestoneCheckJob();
+    this.setupDailyTopKeywordsJob();
     console.log('✅ Cron jobs initialized');
   }
 
@@ -109,6 +112,27 @@ export class CronService {
 
     console.log(
       '📅 Daily milestone check job scheduled: 8:00 AM UTC every day'
+    );
+  }
+
+  /**
+   * Setup daily top keywords fetching job
+   * Runs at 7:00 AM UTC every day (after daily traffic job)
+   */
+  private setupDailyTopKeywordsJob(): void {
+    cron.schedule(
+      '0 7 * * *',
+      async () => {
+        console.log('🔑 Starting daily top keywords fetch job...');
+        await this.fetchTopKeywords();
+      },
+      {
+        timezone: 'UTC',
+      }
+    );
+
+    console.log(
+      '📅 Daily top keywords job scheduled: 7:00 AM UTC every day'
     );
   }
 
@@ -450,6 +474,214 @@ export class CronService {
   }
 
   /**
+   * Fetch top keywords for all active campaigns
+   */
+  private async fetchTopKeywords(): Promise<void> {
+    try {
+      console.log('🔑 Fetching top keywords for all active campaigns...');
+
+      // Get all active campaigns with Google accounts
+      const activeCampaigns = await prisma.campaign.findMany({
+        where: {
+          status: 'ACTIVE',
+        },
+        include: {
+          googleAccount: true,
+        },
+      });
+
+      console.log(
+        `📊 Found ${activeCampaigns.length} active campaigns for top keywords`
+      );
+
+      if (activeCampaigns.length === 0) {
+        console.log(
+          'ℹ️  No active campaigns found, skipping top keywords fetch'
+        );
+        return;
+      }
+
+      // Get current month
+      const currentDate = new Date();
+      const currentMonth = currentDate.getMonth(); // 0-based
+      const currentYear = currentDate.getFullYear();
+
+      // Fetch top keywords for each campaign
+      const results = await Promise.allSettled(
+        activeCampaigns.map(async (campaign) => {
+          console.log(
+            `🔄 Fetching top keywords for campaign: ${campaign.name} (${campaign.id})`
+          );
+
+          try {
+            if (!campaign.googleAccount) {
+              console.log(`❌ No Google account for campaign: ${campaign.name}`);
+              return {
+                campaignId: campaign.id,
+                campaignName: campaign.name,
+                success: false,
+                error: 'No Google account',
+              };
+            }
+
+            // Calculate date range for current month
+            const startDate = moment.utc([currentYear, currentMonth, 1]);
+            const endDate = moment.utc([currentYear, currentMonth, 1]).endOf('month');
+
+            // Fetch current month data from GSC
+            const currentMonthData = await searchConsoleService.getAnalytics({
+              campaign,
+              googleAccount: campaign.googleAccount,
+              startAt: startDate,
+              endAt: endDate,
+              dimensions: ['query'],
+            });
+
+            if (!currentMonthData || currentMonthData.length === 0) {
+              console.log(`ℹ️  No data for campaign: ${campaign.name}`);
+              return {
+                campaignId: campaign.id,
+                campaignName: campaign.name,
+                success: true,
+                keywordCount: 0,
+              };
+            }
+
+            // Fetch previous month data for comparison
+            const prevStartDate = moment.utc([currentYear, currentMonth, 1]).subtract(1, 'month');
+            const prevEndDate = moment.utc([currentYear, currentMonth, 1]).subtract(1, 'month').endOf('month');
+
+            const previousMonthData = await searchConsoleService.getAnalytics({
+              campaign,
+              googleAccount: campaign.googleAccount,
+              startAt: prevStartDate,
+              endAt: prevEndDate,
+              dimensions: ['query'],
+            });
+
+            // Create a map of previous month data
+            // Note: GSC service automatically adds 'date' dimension, so keys are [date, query]
+            const prevMonthMap = new Map<string, { position: number }>();
+            if (previousMonthData) {
+              previousMonthData.forEach(row => {
+                // keys[0] is date, keys[1] is query (keyword)
+                const keyword = row.keys?.[1];
+                if (keyword && row.position) {
+                  prevMonthMap.set(keyword, { position: row.position });
+                }
+              });
+            }
+
+            // Process and store top 50 keywords
+            // Note: GSC service automatically adds 'date' dimension, so keys are [date, query]
+            const topKeywords = currentMonthData
+              .map(row => {
+                // keys[0] is date, keys[1] is query (keyword)
+                const keyword = row.keys?.[1];
+                if (!keyword) return null;
+
+                const currentPosition = row.position || 0;
+                const previousPosition = prevMonthMap.get(keyword)?.position || 0;
+
+                let rankChange = 0;
+                let rankChangeDirection: 'up' | 'down' | 'same' = 'same';
+
+                if (previousPosition > 0 && currentPosition > 0) {
+                  rankChange = previousPosition - currentPosition;
+                  if (rankChange > 0) rankChangeDirection = 'up';
+                  else if (rankChange < 0) rankChangeDirection = 'down';
+                }
+
+                return {
+                  keyword,
+                  averageRank: currentPosition,
+                  clicks: row.clicks || 0,
+                  impressions: row.impressions || 0,
+                  rankChange: Math.abs(rankChange),
+                  rankChangeDirection,
+                };
+              })
+              .filter((k): k is NonNullable<typeof k> => k !== null)
+              .sort((a, b) => b.clicks - a.clicks)
+              .slice(0, 50); // Store top 50
+
+            // Upsert keywords to database
+            for (const kw of topKeywords) {
+              await prisma.topKeywordData.upsert({
+                where: {
+                  campaignId_keyword_month_year: {
+                    campaignId: campaign.id,
+                    keyword: kw.keyword,
+                    month: currentMonth + 1, // 1-based for database
+                    year: currentYear,
+                  },
+                },
+                update: {
+                  averageRank: kw.averageRank,
+                  clicks: kw.clicks,
+                  impressions: kw.impressions,
+                  rankChange: kw.rankChange,
+                  rankChangeDirection: kw.rankChangeDirection,
+                  fetchedAt: new Date(),
+                },
+                create: {
+                  campaignId: campaign.id,
+                  keyword: kw.keyword,
+                  month: currentMonth + 1,
+                  year: currentYear,
+                  averageRank: kw.averageRank,
+                  clicks: kw.clicks,
+                  impressions: kw.impressions,
+                  rankChange: kw.rankChange,
+                  rankChangeDirection: kw.rankChangeDirection,
+                },
+              });
+            }
+
+            console.log(
+              `✅ Successfully fetched ${topKeywords.length} top keywords for campaign: ${campaign.name}`
+            );
+            return {
+              campaignId: campaign.id,
+              campaignName: campaign.name,
+              success: true,
+              keywordCount: topKeywords.length,
+            };
+          } catch (error) {
+            console.error(
+              `💥 Error fetching top keywords for campaign ${campaign.name}:`,
+              error
+            );
+            return {
+              campaignId: campaign.id,
+              campaignName: campaign.name,
+              success: false,
+              error,
+            };
+          }
+        })
+      );
+
+      // Log summary
+      const successful = results.filter(
+        (result: any) => result.status === 'fulfilled' && result.value.success
+      ).length;
+      const failed = results.length - successful;
+      const totalKeywords = results
+        .filter((result: any) => result.status === 'fulfilled')
+        .reduce((sum: number, result: any) => sum + (result.value.keywordCount || 0), 0);
+
+      console.log(`📈 Top keywords job completed:`);
+      console.log(`   ✅ Successful: ${successful}`);
+      console.log(`   ❌ Failed: ${failed}`);
+      console.log(`   🔑 Total keywords stored: ${totalKeywords}`);
+      console.log(`   📊 Total campaigns processed: ${results.length}`);
+    } catch (error) {
+      console.error('💥 Error in top keywords job:', error);
+    }
+  }
+
+  /**
    * Manually trigger the monthly analytics job (for testing)
    */
   public async triggerMonthlyAnalytics(): Promise<void> {
@@ -482,6 +714,14 @@ export class CronService {
   }
 
   /**
+   * Manually trigger the top keywords fetch job (for testing)
+   */
+  public async triggerTopKeywordsFetch(): Promise<void> {
+    console.log('🚀 Manually triggering top keywords fetch job...');
+    await this.fetchTopKeywords();
+  }
+
+  /**
    * Get cron job status
    */
   public getCronStatus(): { initialized: boolean; jobs: string[] } {
@@ -491,6 +731,7 @@ export class CronService {
         'Monthly Analytics Fetch - 0 2 1 * * (2:00 AM UTC on 1st of every month)',
         'Daily Traffic Fetch - 0 6 * * * (6:00 AM UTC every day)',
         'Cannibalization Audit - 0 4 * * * (4:00 AM UTC every day)',
+        'Daily Top Keywords Fetch - 0 7 * * * (7:00 AM UTC every day)',
         'Daily Milestone Check - 0 8 * * * (8:00 AM UTC every day)',
       ],
     };

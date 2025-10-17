@@ -406,14 +406,14 @@ export class AnalyticsService {
       averageCtr:
         totalStats.totalImpressions > 0
           ? Math.round(
-              (totalStats.totalClicks / totalStats.totalImpressions) * 100 * 10
-            ) / 10
+            (totalStats.totalClicks / totalStats.totalImpressions) * 100 * 10
+          ) / 10
           : 0,
       averagePosition:
         totalStats.totalImpressions > 0
           ? Math.round(
-              (totalStats.sumOfPositions / totalStats.totalImpressions) * 10
-            ) / 10
+            (totalStats.sumOfPositions / totalStats.totalImpressions) * 10
+          ) / 10
           : 0,
     };
   };
@@ -447,14 +447,14 @@ export class AnalyticsService {
       averageCtr:
         stats.totalImpressions > 0
           ? Math.round(
-              (stats.totalClicks / stats.totalImpressions) * 100 * 10
-            ) / 10
+            (stats.totalClicks / stats.totalImpressions) * 100 * 10
+          ) / 10
           : 0,
       averagePosition:
         stats.totalImpressions > 0
           ? Math.round(
-              (stats.sumOfWeightedPositions / stats.totalImpressions) * 10
-            ) / 10
+            (stats.sumOfWeightedPositions / stats.totalImpressions) * 10
+          ) / 10
           : 0,
     };
   };
@@ -1137,14 +1137,16 @@ export class AnalyticsService {
     }
   }
 
-  private async fetchTrafficData({
+  async fetchTrafficData({
     campaign,
     googleAccount,
     waitForAllData,
+    selectedMonth,
   }: {
     campaign: Campaign;
     googleAccount: GoogleAccount;
     waitForAllData: boolean;
+    selectedMonth?: string;
   }): Promise<{
     monthly: Record<
       string,
@@ -1197,9 +1199,36 @@ export class AnalyticsService {
         }
       }
 
-      // Fetch daily traffic data for the current month (from first day to end of month)
-      const dailyStartDate = moment().startOf('month').startOf('day');
-      const dailyEndDate = moment().endOf('month').endOf('day');
+      // Determine which month to fetch daily data for
+      let dailyStartDate: moment.Moment;
+      let dailyEndDate: moment.Moment;
+
+      if (selectedMonth) {
+        // Supports "Oct 24" or "October 2025"
+        const monthNamesAbbrev = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const monthNamesFull = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+        const [monthStr, yearStrRaw] = selectedMonth.split(' ');
+        let monthIndex = monthNamesAbbrev.indexOf(monthStr);
+        if (monthIndex === -1) monthIndex = monthNamesFull.indexOf(monthStr);
+
+        if (monthIndex !== -1) {
+          const yearNum = parseInt(yearStrRaw, 10);
+          const year = yearStrRaw.length === 2 ? 2000 + yearNum : yearNum; // Handle YY or YYYY
+          dailyStartDate = moment([year, monthIndex]).startOf('month');
+          dailyEndDate = moment([year, monthIndex]).endOf('month');
+          console.log(`[fetchTrafficData] Using selected month: ${selectedMonth}, date range: ${dailyStartDate.format('YYYY-MM-DD')} to ${dailyEndDate.format('YYYY-MM-DD')}`);
+        } else {
+          // Fallback to current month if parsing fails
+          dailyStartDate = moment().startOf('month');
+          dailyEndDate = moment().endOf('month');
+          console.log(`[fetchTrafficData] Failed to parse month: ${selectedMonth}, using current month`);
+        }
+      } else {
+        // Default to current month
+        dailyStartDate = moment().startOf('month');
+        dailyEndDate = moment().endOf('month');
+        console.log(`[fetchTrafficData] No month selected, using current month`);
+      }
 
       const dailyTraffic = await this.fetchDailyTrafficData({
         campaign,
@@ -2664,8 +2693,7 @@ export class AnalyticsService {
           });
 
           console.log(
-            `Computed monthly metrics for keyword "${
-              keyword.keyword
+            `Computed monthly metrics for keyword "${keyword.keyword
             }" in ${month}/${year}: position ${monthlyPosition.toFixed(
               2
             )}, page: ${topPageUrl}`

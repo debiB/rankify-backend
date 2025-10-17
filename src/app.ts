@@ -8,6 +8,7 @@ import { appRouter } from './trpc/router';
 import { createContext } from './trpc/context';
 import { initializeAdmin } from './utils/adminInit';
 import { verifySMTPConnection } from './utils/email';
+import { splitUserNames } from './utils/splitUserNames';
 import oauthRoutes from './routes/oauth';
 import { CronService } from './services/cronService';
 
@@ -83,6 +84,9 @@ const startServer = async () => {
   try {
     // Initialize admin account
     await initializeAdmin();
+
+    // Split user names (firstName/lastName migration)
+    await splitUserNames();
 
     // Verify SMTP connection
     const smtpVerified = await verifySMTPConnection();
