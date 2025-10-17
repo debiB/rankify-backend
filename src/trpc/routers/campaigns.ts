@@ -3034,7 +3034,22 @@ export const campaignsRouter = router({
           .map(r => { const d = new Date(r.date); return { date: `${d.getDate()} ${abbr[d.getMonth()]}`, clicks: r.clicks, impressions: r.impressions, ctr: r.ctr, position: r.position }; })
           .sort((a, b) => parseInt(a.date.split(' ')[0]) - parseInt(b.date.split(' ')[0]));
 
-        return { monthly, daily };
+        // Calculate percentage change for current month vs previous month
+        const prevYear = targetMonth0 === 0 ? targetYear - 1 : targetYear;
+        const prevMonth0 = targetMonth0 === 0 ? 11 : targetMonth0 - 1;
+        const prevDailyRows = await prisma.searchConsoleTrafficDaily.findMany({
+          where: { analyticsId: trafficAnalytics!.id, date: { gte: new Date(prevYear, prevMonth0, 1), lt: new Date(prevYear, prevMonth0 + 1, 1) } },
+          orderBy: { date: 'asc' },
+        });
+        
+        const sumClicks = (rs: { clicks: number }[]) =>
+          rs.reduce((acc: number, row: { clicks: number }) => acc + row.clicks, 0);
+          
+        const currentMonthClicks = sumClicks(dailyRows);
+        const previousMonthClicks = sumClicks(prevDailyRows);
+        const percentageChange = previousMonthClicks > 0 ? Math.round(((currentMonthClicks - previousMonthClicks) / previousMonthClicks) * 100) : 0;
+
+        return { monthly, daily, percentageChange };
       } catch (error) {
         console.error('Error in getCampaignTrafficData:', error);
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to fetch campaign traffic data' });
@@ -3354,42 +3369,78 @@ getKeywordMovementStats: protectedProcedure
     .input(z.object({ campaignId: z.string().min(1) }))
     .query(async ({ input, ctx }) => {
       try {
+        console.log('getBestPerformingMonth called with campaignId:', input.campaignId);
+        
         const campaign = await prisma.campaign.findFirst({ where: { id: input.campaignId } });
-        if (!campaign) throw new TRPCError({ code: 'NOT_FOUND', message: 'Campaign not found' });
-        if (campaign.userId !== ctx.user.id && ctx.user.role !== 'ADMIN') {
+        if (!campaign) {
+          console.log('Campaign not found for ID:', input.campaignId);
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Campaign not found' });
+        }
+        
+        console.log('Found campaign:', campaign.name, 'for user:', campaign.userId);
+        
+        // Check if user has access to this campaign
+        if (ctx.user.role !== 'ADMIN' && campaign.userId !== ctx.user.id) {
+          console.log('User does not have access to campaign. User role:', ctx.user.role, 'User ID:', ctx.user.id, 'Campaign user ID:', campaign.userId);
           throw new TRPCError({ code: 'FORBIDDEN', message: 'You do not have access to this campaign' });
         }
 
         const analytics = await prisma.searchConsoleTrafficAnalytics.findFirst({ where: { siteUrl: campaign.searchConsoleSite } });
         if (!analytics) {
+          console.log('Analytics not found for site:', campaign.searchConsoleSite);
           return { bestMonth: null, bestMonthClicks: 0, comparisonClicks: 0, improvementPercentage: 0 };
         }
 
         const today = new Date();
         const thisYear = today.getFullYear();
         const lastYear = thisYear - 1;
+        
+        console.log('Checking data for years:', thisYear, 'and', lastYear);
 
         const monthly = await prisma.searchConsoleTrafficMonthly.findMany({
           where: { analyticsId: analytics.id, OR: [{ year: thisYear }, { year: lastYear }] },
         });
+        
+        console.log('Found', monthly.length, 'monthly records');
 
         const thisYearRows = monthly.filter((m) => m.year === thisYear);
+        console.log('Found', thisYearRows.length, 'records for year', thisYear);
+        
         if (thisYearRows.length === 0) {
+          console.log('No data for this year');
           return { bestMonth: null, bestMonthClicks: 0, comparisonClicks: 0, improvementPercentage: 0 };
         }
 
+        // Find the month with the highest clicks
         const best = thisYearRows.reduce((b, r) => (r.clicks > b.clicks ? r : b));
+        console.log('Best month record:', best);
+        
         const comparison = monthly.find((m) => m.year === lastYear && m.month === best.month);
         const comparisonClicks = comparison?.clicks || 0;
-        const improvementPercentage =
-          comparisonClicks > 0 ? Math.round(((best.clicks - comparisonClicks) / comparisonClicks) * 100) : 0;
+        console.log('Comparison record:', comparison);
+        console.log('Comparison clicks:', comparisonClicks);
+        
+        // Calculate improvement percentage
+        let improvementPercentage = 0;
+        if (comparisonClicks > 0) {
+          improvementPercentage = Math.round(((best.clicks - comparisonClicks) / comparisonClicks) * 100);
+        } else if (best.clicks > 0) {
+          // If there's no comparison data but we have clicks this year, show 100% improvement
+          improvementPercentage = 100;
+        }
+        
+        console.log('Calculated improvement percentage:', improvementPercentage);
 
-        return {
+        const result = {
           bestMonth: best.month,
           bestMonthClicks: best.clicks,
           comparisonClicks,
           improvementPercentage,
         };
+        
+        console.log('Best Performing Month Debug:', result);
+
+        return result;
       } catch (error) {
         console.error('Error in getBestPerformingMonth:', error);
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to get best performing month' });
