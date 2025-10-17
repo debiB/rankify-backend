@@ -3025,7 +3025,7 @@ export const campaignsRouter = router({
           const clicks = dailyRows.reduce((s, r) => s + r.clicks, 0);
           const impr = dailyRows.reduce((s, r) => s + r.impressions, 0);
           const ctr = impr > 0 ? (clicks / impr) * 100 : 0;
-          const pos = dailyRows.reduce((s, r) => s + r.position, 0) / dailyRows.length;
+          const pos = dailyRows.reduce((s, r) => s + (r.position ?? 0), 0) / dailyRows.length;
           monthly.push({ month: `${abbr[targetMonth0]} ${String(targetYear).slice(-2)}`, clicks, impressions: impr, ctr: parseFloat(ctr.toFixed(2)), position: parseFloat(pos.toFixed(2)) });
         }
 
@@ -3127,7 +3127,7 @@ export const campaignsRouter = router({
           }
           rows = await prisma.topKeywordData.findMany({ where: { campaignId, month: targetMonth, year: targetYear }, orderBy: { clicks: 'desc' }, take: limit });
         }
-        const keywords = rows.map(r => ({ keyword: r.keyword, averageRank: r.averageRank, clicks: r.clicks, impressions: r.impressions, rankChange: r.rankChange, rankChangeDirection: r.rankChangeDirection as 'up'|'down'|'same' }));
+        const keywords = rows.map((r: any) => ({ keyword: r.keyword, averageRank: r.averageRank, clicks: r.clicks, impressions: r.impressions, rankChange: r.rankChange, rankChangeDirection: r.rankChangeDirection as 'up'|'down'|'same' }));
         return { keywords };
       } catch (error) {
         console.error('Error in getTopKeywordsThisMonth:', error);

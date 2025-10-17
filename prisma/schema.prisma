@@ -470,7 +470,7 @@ model TopKeywordData {
   fetchedAt           DateTime @default(now())
   campaign            Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
 
-  @@unique([campaignId, keyword(length: 255), month, year])
+  @@unique([campaignId, keyword(length: 255), month, year], name: "campaignId_keyword_month_year")
   @@index([campaignId, month, year])
   @@index([fetchedAt])
 }
