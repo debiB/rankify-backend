@@ -3034,7 +3034,22 @@ export const campaignsRouter = router({
           .map(r => { const d = new Date(r.date); return { date: `${d.getDate()} ${abbr[d.getMonth()]}`, clicks: r.clicks, impressions: r.impressions, ctr: r.ctr, position: r.position }; })
           .sort((a, b) => parseInt(a.date.split(' ')[0]) - parseInt(b.date.split(' ')[0]));
 
-        return { monthly, daily };
+        // Calculate percentage change for current month vs previous month
+        const prevYear = targetMonth0 === 0 ? targetYear - 1 : targetYear;
+        const prevMonth0 = targetMonth0 === 0 ? 11 : targetMonth0 - 1;
+        const prevDailyRows = await prisma.searchConsoleTrafficDaily.findMany({
+          where: { analyticsId: trafficAnalytics!.id, date: { gte: new Date(prevYear, prevMonth0, 1), lt: new Date(prevYear, prevMonth0 + 1, 1) } },
+          orderBy: { date: 'asc' },
+        });
+        
+        const sumClicks = (rs: { clicks: number }[]) =>
+          rs.reduce((acc: number, row: { clicks: number }) => acc + row.clicks, 0);
+          
+        const currentMonthClicks = sumClicks(dailyRows);
+        const previousMonthClicks = sumClicks(prevDailyRows);
+        const percentageChange = previousMonthClicks > 0 ? Math.round(((currentMonthClicks - previousMonthClicks) / previousMonthClicks) * 100) : 0;
+
+        return { monthly, daily, percentageChange };
       } catch (error) {
         console.error('Error in getCampaignTrafficData:', error);
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to fetch campaign traffic data' });
@@ -3381,8 +3396,24 @@ getKeywordMovementStats: protectedProcedure
         const best = thisYearRows.reduce((b, r) => (r.clicks > b.clicks ? r : b));
         const comparison = monthly.find((m) => m.year === lastYear && m.month === best.month);
         const comparisonClicks = comparison?.clicks || 0;
-        const improvementPercentage =
-          comparisonClicks > 0 ? Math.round(((best.clicks - comparisonClicks) / comparisonClicks) * 100) : 0;
+        
+        // Calculate improvement percentage
+        let improvementPercentage = 0;
+        if (comparisonClicks > 0) {
+          improvementPercentage = Math.round(((best.clicks - comparisonClicks) / comparisonClicks) * 100);
+        } else if (best.clicks > 0) {
+          // If there's no comparison data but we have clicks this year, show 100% improvement
+          improvementPercentage = 100;
+        }
+
+        console.log('Best Performing Month Debug:', {
+          bestMonth: best.month,
+          bestMonthClicks: best.clicks,
+          comparisonClicks,
+          improvementPercentage,
+          thisYear,
+          lastYear
+        });
 
         return {
           bestMonth: best.month,
