@@ -1,4 +1,4 @@
-import { router, publicProcedure } from '../trpc-context';
+import { router, adminProcedure } from '../trpc-context';
 import { contentGenerationService } from '../../services/contentGenerationService';
 import { contentReviewService, ReviewResult } from '../../services/contentReviewService';
 import { z } from 'zod';
@@ -10,7 +10,7 @@ export const contentGenerationRouter = router({
    * Generate article content using Gemini API
    * POST /content/generate
    */
-  generate: publicProcedure
+  generate: adminProcedure
     .input(z.object({
       contentPlanId: z.string().min(1, 'Content plan ID is required'),
       brandProfileId: z.string().min(1, 'Brand profile ID is required'),
@@ -41,7 +41,7 @@ export const contentGenerationRouter = router({
    * Retrieve generated content by ID
    * GET /content/:id
    */
-  getById: publicProcedure
+  getById: adminProcedure
     .input(z.object({
       id: z.string().min(1, 'Generated content ID is required')
     }))
@@ -65,7 +65,7 @@ export const contentGenerationRouter = router({
    * Update generated content
    * PUT /content/:id
    */
-  update: publicProcedure
+  update: adminProcedure
     .input(z.object({
       id: z.string().min(1, 'Generated content ID is required'),
       updates: z.object({
@@ -108,7 +108,7 @@ export const contentGenerationRouter = router({
    * Finalize generated content (mark as complete)
    * PUT /content/:id/finalize
    */
-  finalize: publicProcedure
+  finalize: adminProcedure
     .input(z.object({
       id: z.string().min(1, 'Generated content ID is required')
     }))
@@ -129,7 +129,7 @@ export const contentGenerationRouter = router({
    * Review generated content for quality metrics
    * GET /content/:id/review
    */
-  review: publicProcedure
+  review: adminProcedure
     .input(z.object({
       id: z.string().min(1, 'Generated content ID is required')
     }))
