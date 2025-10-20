@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
-import { adminProcedure, router } from '../context';
+import { adminProcedure, router } from '../trpc-context';
 import { prisma } from '../../utils/prisma';
 import { WhatsAppService } from '../../services/whatsappService';
 

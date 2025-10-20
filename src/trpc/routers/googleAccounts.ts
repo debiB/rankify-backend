@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { router, adminProcedure } from '../context';
+import { router, adminProcedure } from '../trpc-context';
 import { PrismaClient } from '@prisma/client';
 import { google } from 'googleapis';
 import { searchConsoleService } from '../../services/searchConsole';
