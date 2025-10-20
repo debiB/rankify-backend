@@ -116,9 +116,9 @@ export class BrandService {
     
     // Get individual resource analyses
     const individualAnalyses = await this.analyzeIndividualResources(
-      brandProfile.urls.map(url => url.url),
-      brandProfile.pdfs.map(pdf => pdf.url),
-      brandProfile.otherDocs.map(doc => doc.url)
+      brandProfile.urls.map((url: { url: string }) => url.url),
+      brandProfile.pdfs.map((pdf: { url: string }) => pdf.url),
+      brandProfile.otherDocs.map((doc: { url: string }) => doc.url)
     );
     
     return {
@@ -200,9 +200,9 @@ export class BrandService {
     }
     
     // Extract URLs, PDFs, and other documents from the brand profile
-    const urls = brandProfile.urls.map(url => url.url);
-    const pdfs = brandProfile.pdfs.map(pdf => pdf.url);
-    const otherDocs = brandProfile.otherDocs.map(doc => doc.url);
+    const urls = brandProfile.urls.map((url: { url: string }) => url.url);
+    const pdfs = brandProfile.pdfs.map((pdf: { url: string }) => pdf.url);
+    const otherDocs = brandProfile.otherDocs.map((doc: { url: string }) => doc.url);
     
     // Analyze all resources
     const toneData = await this.analyzeBrandResources(urls, pdfs, otherDocs);

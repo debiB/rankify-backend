@@ -222,16 +222,16 @@ export const brandRouter = router({
         
         // Merge existing resources with new ones
         const updatedUrls = input.urls 
-          ? [...new Set([...(currentBrandProfile.urls?.map(u => u.url) || []), ...input.urls])]
-          : currentBrandProfile.urls?.map(u => u.url) || [];
+          ? [...new Set([...(currentBrandProfile.urls?.map((u: { url: string }) => u.url) || []), ...input.urls])]
+          : currentBrandProfile.urls?.map((u: { url: string }) => u.url) || [];
           
         const updatedPdfs = input.pdfs
-          ? [...new Set([...(currentBrandProfile.pdfs?.map(p => p.url) || []), ...input.pdfs])]
-          : currentBrandProfile.pdfs?.map(p => p.url) || [];
+          ? [...new Set([...(currentBrandProfile.pdfs?.map((p: { url: string }) => p.url) || []), ...input.pdfs])]
+          : currentBrandProfile.pdfs?.map((p: { url: string }) => p.url) || [];
           
         const updatedOtherDocs = input.otherDocs
-          ? [...new Set([...(currentBrandProfile.otherDocs?.map(d => d.url) || []), ...input.otherDocs])]
-          : currentBrandProfile.otherDocs?.map(d => d.url) || [];
+          ? [...new Set([...(currentBrandProfile.otherDocs?.map((d: { url: string }) => d.url) || []), ...input.otherDocs])]
+          : currentBrandProfile.otherDocs?.map((d: { url: string }) => d.url) || [];
         
         // Update the brand profile with new resources
         const brandProfile = await brandService.updateBrandProfile({
