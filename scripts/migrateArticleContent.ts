@@ -1,4 +1,4 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Prisma } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
@@ -86,7 +86,9 @@ async function migrateArticleContent() {
         articleText: {
           not: null
         },
-        articleContent: null
+        articleContent: {
+          equals: Prisma.JsonNull
+        }
       }
     });
 

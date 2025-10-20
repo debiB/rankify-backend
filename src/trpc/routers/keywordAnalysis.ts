@@ -1,6 +1,7 @@
 import { router, publicProcedure } from '../trpc-context';
 import { keywordAnalysisService } from '../../services/keywordAnalysisService';
 import { z } from 'zod';
+import type { inferRouterOutputs, inferRouterInputs } from '@trpc/server';
 
 export const keywordAnalysisRouter = router({
   /**
@@ -52,3 +53,8 @@ export const keywordAnalysisRouter = router({
       }
     })
 });
+
+// Add explicit type exports to avoid TS2742 error
+export type KeywordAnalysisRouter = typeof keywordAnalysisRouter;
+export type KeywordAnalysisRouterInputs = inferRouterInputs<KeywordAnalysisRouter>;
+export type KeywordAnalysisRouterOutputs = inferRouterOutputs<KeywordAnalysisRouter>;
