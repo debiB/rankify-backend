@@ -2223,6 +2223,15 @@ export const campaignsRouter = router({
                     return currentStat?.topRankingPageUrl || '';
                   }
                 })(),
+                // Provide previous month’s top page link for tooltip usage
+                previousTopPageLink: (() => {
+                  try {
+                    const url = previousMonthTopPage || '';
+                    return url ? decodeURIComponent(url) : '';
+                  } catch {
+                    return previousMonthTopPage || '';
+                  }
+                })(),
                 // Add the comparison result for frontend use
                 isTopPageChanged: isTopPageChanged,
               };
@@ -2245,6 +2254,7 @@ export const campaignsRouter = router({
                 position: 0,
                 searchVolume: 0,
                 topPageLink: '', // Empty string for top page link in error cases
+                previousTopPageLink: '', // Maintain shape: empty previous link in error cases
                 isTopPageChanged: false, // Default to false in error cases
               };
             }
@@ -2894,6 +2904,14 @@ export const campaignsRouter = router({
                       return currentStat?.topRankingPageUrl || '';
                     }
                   })(),
+                  previousTopPageLink: (() => {
+                    try {
+                      const url = previousMonthTopPage || '';
+                      return url ? decodeURIComponent(url) : '';
+                    } catch {
+                      return previousMonthTopPage || '';
+                    }
+                  })(),
                   isTopPageChanged: isTopPageChanged,
                 };
               } catch (e) {
@@ -2907,6 +2925,7 @@ export const campaignsRouter = router({
                   position: 0,
                   searchVolume: 0,
                   topPageLink: '',
+                  previousTopPageLink: '',
                   isTopPageChanged: false,
                 };
               }
@@ -3032,7 +3051,8 @@ export const campaignsRouter = router({
 
         // Build monthly series for last 12 months anchored to selected month
         const anchor = new Date(targetYear, targetMonth0, 1);
-        const monthly: Array<{ month: string; clicks: number; impressions: number; ctr: number; position: number }> = [];
+        const monthly: Array<{ month: string; clicks: number; impressions: number; ctr: number; position: number; percentageChange: number }> = [];
+        
         for (let i = 12; i >= 1; i--) {
           const d = new Date(anchor.getFullYear(), anchor.getMonth() - i, 1);
           let rec = await prisma.searchConsoleTrafficMonthly.findFirst({
@@ -3042,7 +3062,44 @@ export const campaignsRouter = router({
             rec = await ensureMonthly(d.getFullYear(), d.getMonth());
           }
           if (rec) {
-            monthly.push({ month: `${abbr[d.getMonth()]} ${String(d.getFullYear()).slice(-2)}`, clicks: rec.clicks, impressions: rec.impressions, ctr: rec.ctr, position: rec.position });
+            const currentClicks = rec.clicks;
+            
+            // Calculate percentage change compared to previous month of the same year
+            let prevMonthClicks = 0;
+            if (d.getMonth() > 0) {
+              // Previous month in same year
+              const prevRec = await prisma.searchConsoleTrafficMonthly.findFirst({
+                where: { analyticsId: trafficAnalytics!.id, year: d.getFullYear(), month: d.getMonth() },
+              });
+              if (!prevRec) {
+                const prevRecFetched = await ensureMonthly(d.getFullYear(), d.getMonth() - 1);
+                prevMonthClicks = prevRecFetched?.clicks || 0;
+              } else {
+                prevMonthClicks = prevRec.clicks;
+              }
+            } else {
+              // December of previous year
+              const prevRec = await prisma.searchConsoleTrafficMonthly.findFirst({
+                where: { analyticsId: trafficAnalytics!.id, year: d.getFullYear() - 1, month: 12 },
+              });
+              if (!prevRec) {
+                const prevRecFetched = await ensureMonthly(d.getFullYear() - 1, 11); // December is month 11 (0-indexed)
+                prevMonthClicks = prevRecFetched?.clicks || 0;
+              } else {
+                prevMonthClicks = prevRec.clicks;
+              }
+            }
+            
+            const percentageChange = prevMonthClicks > 0 ? Math.round(((currentClicks - prevMonthClicks) / prevMonthClicks) * 100) : 0;
+            
+            monthly.push({ 
+              month: `${abbr[d.getMonth()]} ${String(d.getFullYear()).slice(-2)}`, 
+              clicks: rec.clicks, 
+              impressions: rec.impressions, 
+              ctr: rec.ctr, 
+              position: rec.position,
+              percentageChange: percentageChange
+            });
           }
         }
         // Add selected month aggregated from daily rows
@@ -3055,7 +3112,43 @@ export const campaignsRouter = router({
           const impr = dailyRows.reduce((s, r) => s + r.impressions, 0);
           const ctr = impr > 0 ? (clicks / impr) * 100 : 0;
           const pos = dailyRows.reduce((s, r) => s + (r.position ?? 0), 0) / dailyRows.length;
-          monthly.push({ month: `${abbr[targetMonth0]} ${String(targetYear).slice(-2)}`, clicks, impressions: impr, ctr: parseFloat(ctr.toFixed(2)), position: parseFloat(pos.toFixed(2)) });
+          
+          // Calculate percentage change for selected month compared to previous month of the same year
+          let prevMonthClicks = 0;
+          if (targetMonth0 > 0) {
+            // Previous month in same year
+            const prevRec = await prisma.searchConsoleTrafficMonthly.findFirst({
+              where: { analyticsId: trafficAnalytics!.id, year: targetYear, month: targetMonth0 },
+            });
+            if (!prevRec) {
+              const prevRecFetched = await ensureMonthly(targetYear, targetMonth0 - 1);
+              prevMonthClicks = prevRecFetched?.clicks || 0;
+            } else {
+              prevMonthClicks = prevRec.clicks;
+            }
+          } else {
+            // December of previous year
+            const prevRec = await prisma.searchConsoleTrafficMonthly.findFirst({
+              where: { analyticsId: trafficAnalytics!.id, year: targetYear - 1, month: 12 },
+            });
+            if (!prevRec) {
+              const prevRecFetched = await ensureMonthly(targetYear - 1, 11); // December is month 11 (0-indexed)
+              prevMonthClicks = prevRecFetched?.clicks || 0;
+            } else {
+              prevMonthClicks = prevRec.clicks;
+            }
+          }
+          
+          const selectedMonthPercentageChange = prevMonthClicks > 0 ? Math.round(((clicks - prevMonthClicks) / prevMonthClicks) * 100) : 0;
+          
+          monthly.push({ 
+            month: `${abbr[targetMonth0]} ${String(targetYear).slice(-2)}`, 
+            clicks, 
+            impressions: impr, 
+            ctr: parseFloat(ctr.toFixed(2)), 
+            position: parseFloat(pos.toFixed(2)),
+            percentageChange: selectedMonthPercentageChange
+          });
         }
 
         // Build daily series for selected month
@@ -3063,9 +3156,9 @@ export const campaignsRouter = router({
           .map(r => { const d = new Date(r.date); return { date: `${d.getDate()} ${abbr[d.getMonth()]}`, clicks: r.clicks, impressions: r.impressions, ctr: r.ctr, position: r.position }; })
           .sort((a, b) => parseInt(a.date.split(' ')[0]) - parseInt(b.date.split(' ')[0]));
 
-        // Calculate percentage change for current month vs previous month
-        const prevYear = targetMonth0 === 0 ? targetYear - 1 : targetYear;
-        const prevMonth0 = targetMonth0 === 0 ? 11 : targetMonth0 - 1;
+        // Calculate percentage change for current month vs same month last year (overall percentage)
+        const prevYear = targetYear - 1;
+        const prevMonth0 = targetMonth0; // Same month, previous year
         const prevDailyRows = await prisma.searchConsoleTrafficDaily.findMany({
           where: { analyticsId: trafficAnalytics!.id, date: { gte: new Date(prevYear, prevMonth0, 1), lt: new Date(prevYear, prevMonth0 + 1, 1) } },
           orderBy: { date: 'asc' },
@@ -3075,8 +3168,8 @@ export const campaignsRouter = router({
           rs.reduce((acc: number, row: { clicks: number }) => acc + row.clicks, 0);
           
         const currentMonthClicks = sumClicks(dailyRows);
-        const previousMonthClicks = sumClicks(prevDailyRows);
-        const percentageChange = previousMonthClicks > 0 ? Math.round(((currentMonthClicks - previousMonthClicks) / previousMonthClicks) * 100) : 0;
+        const prevMonthClicks = sumClicks(prevDailyRows);
+        const percentageChange = prevMonthClicks > 0 ? Math.round(((currentMonthClicks - prevMonthClicks) / prevMonthClicks) * 100) : 0;
 
         return { monthly, daily, percentageChange };
       } catch (error) {
@@ -3113,16 +3206,27 @@ export const campaignsRouter = router({
         };
 
         const currRows = await ensureDaily(targetYear, targetMonth0);
-        const prevYear = targetMonth0 === 0 ? targetYear - 1 : targetYear;
-        const prevMonth0 = targetMonth0 === 0 ? 11 : targetMonth0 - 1;
+        // Compare to same day last month (not last year)
+        let prevYear = targetYear;
+        let prevMonth0 = targetMonth0 - 1;
+        if (prevMonth0 < 0) {
+          prevMonth0 = 11; // December
+          prevYear = targetYear - 1;
+        }
         const prevRows = await ensureDaily(prevYear, prevMonth0);
 
         const daysInMonth = new Date(targetYear, targetMonth0 + 1, 0).getDate();
-        const periods: Array<{ period: string; clicks: number }> = [];
-        for (let start = 1; start <= daysInMonth; start += 4) {
-          const end = Math.min(start + 3, daysInMonth);
-          const clicks = currRows.filter(r => { const d = new Date(r.date).getDate(); return d >= start && d <= end; }).reduce((s, r) => s + r.clicks, 0);
-          periods.push({ period: `${start}-${end}`, clicks });
+        const today = new Date();
+        const isCurrentMonth = targetYear === today.getFullYear() && targetMonth0 === today.getMonth();
+        const maxDay = isCurrentMonth ? today.getDate() : daysInMonth;
+        
+        const periods: Array<{ period: string; clicks: number; percentageChange: number }> = [];
+        for (let start = 1; start <= maxDay; start += 4) {
+          const end = Math.min(start + 3, maxDay);
+          const currentPeriodClicks = currRows.filter(r => { const d = new Date(r.date).getDate(); return d >= start && d <= end; }).reduce((s, r) => s + r.clicks, 0);
+          const previousPeriodClicks = prevRows.filter(r => { const d = new Date(r.date).getDate(); return d >= start && d <= end; }).reduce((s, r) => s + r.clicks, 0);
+          const periodPercentageChange = previousPeriodClicks > 0 ? Math.round(((currentPeriodClicks - previousPeriodClicks) / previousPeriodClicks) * 100) : 0;
+          periods.push({ period: `${start}-${end}`, clicks: currentPeriodClicks, percentageChange: periodPercentageChange });
         }
 
         const sumClicks = (rs: { clicks: number }[]) =>
