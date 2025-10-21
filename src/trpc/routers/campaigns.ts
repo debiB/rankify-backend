@@ -496,6 +496,18 @@ async function handleKeywordChanges(
         await prisma.searchConsoleKeywordMonthlyStat.deleteMany({
           where: { keywordId: keyword.id },
         });
+        // Delete monthly computed entries used by CTR/fallbacks
+        await prisma.searchConsoleKeywordMonthlyComputed.deleteMany({
+          where: { keywordId: keyword.id },
+        });
+        // Delete daily stats
+        await prisma.searchConsoleKeywordDailyStat.deleteMany({
+          where: { keywordId: keyword.id },
+        });
+        // Remove any persisted top keyword entries for this campaign+keyword
+        await prisma.topKeywordData.deleteMany({
+          where: { campaignId: newCampaign.id, keyword: keyword.keyword },
+        });
 
         // Delete the keyword
         await prisma.searchConsoleKeyword.delete({
@@ -843,7 +855,7 @@ export const campaignsRouter = router({
         }
 
         // Get computed monthly rows for the selected month/year
-        const rows = await prisma.searchConsoleKeywordMonthlyComputed.findMany({
+        let rows = await prisma.searchConsoleKeywordMonthlyComputed.findMany({
           where: {
             keyword: { analyticsId: analytics.id },
             month: monthNum,
@@ -851,6 +863,23 @@ export const campaignsRouter = router({
           },
           include: { keyword: true },
         });
+
+        // If no computed rows exist yet, backfill once from GSC and retry
+        if (rows.length === 0) {
+          try {
+            await analyticsService.computeAndPersistMonthlyMetrics(campaignId, monthNum, yearNum);
+            rows = await prisma.searchConsoleKeywordMonthlyComputed.findMany({
+              where: {
+                keyword: { analyticsId: analytics.id },
+                month: monthNum,
+                year: yearNum,
+              },
+              include: { keyword: true },
+            });
+          } catch (e) {
+            console.warn('Monthly computed backfill failed:', e);
+          }
+        }
 
         // Filter CTR < 5% (impressions > 0 to avoid divide by zero), sort by impressions desc
         const items = rows
@@ -3108,7 +3137,7 @@ export const campaignsRouter = router({
 
   // Top keywords for selected month with DB-first → GSC fallback → store
   getTopKeywordsThisMonth: protectedProcedure
-    .input(z.object({ campaignId: z.string().min(1), limit: z.number().min(1).max(50).default(10), month: z.string().optional() }))
+    .input(z.object({ campaignId: z.string().min(1), limit: z.number().min(1).max(500).default(100), month: z.string().optional() }))
     .query(async ({ input, ctx }) => {
       try {
         const { campaignId, limit, month } = input;
@@ -3142,8 +3171,78 @@ export const campaignsRouter = router({
           }
           rows = await prisma.topKeywordData.findMany({ where: { campaignId, month: targetMonth, year: targetYear }, orderBy: { clicks: 'desc' }, take: limit });
         }
-        const keywords = rows.map((r: any) => ({ keyword: r.keyword, averageRank: r.averageRank, clicks: r.clicks, impressions: r.impressions, rankChange: r.rankChange, rankChangeDirection: r.rankChangeDirection as 'up'|'down'|'same' }));
-        return { keywords };
+        // Merge in tracked keywords from monthly computed stats to include newly added keywords
+        const existingSet = new Set(rows.map((r: any) => r.keyword));
+
+        // Get analytics id for this site
+        const analytics = await prisma.searchConsoleKeywordAnalytics.findFirst({
+          where: { siteUrl: campaign.searchConsoleSite },
+          select: { id: true },
+        });
+
+        let fallbackItems: Array<{ keyword: string; averageRank: number; clicks: number; impressions: number; rankChange: number; rankChangeDirection: 'up'|'down'|'same' }> = [];
+
+        if (analytics?.id) {
+          // Compute previous month for rank change
+          let prevMonth = targetMonth - 1;
+          let prevYear = targetYear;
+          if (prevMonth === 0) { prevMonth = 12; prevYear--; }
+
+          const computedCurrent = await prisma.searchConsoleKeywordMonthlyComputed.findMany({
+            where: {
+              keyword: { analyticsId: analytics.id },
+              month: targetMonth,
+              year: targetYear,
+            },
+            include: { keyword: true },
+          });
+
+          const computedPrev = await prisma.searchConsoleKeywordMonthlyComputed.findMany({
+            where: {
+              keywordId: { in: computedCurrent.map(c => c.keywordId) },
+              month: prevMonth,
+              year: prevYear,
+            },
+          });
+          const prevById = new Map(computedPrev.map(p => [p.keywordId, p.averageRank || 0]));
+
+          fallbackItems = computedCurrent
+            .filter(c => !!c.keyword?.keyword && !existingSet.has(c.keyword.keyword) && (c.averageRank || 0) > 0)
+            .map(c => {
+              const currPos = c.averageRank || 0;
+              const prevPos = prevById.get(c.keywordId) || 0;
+              let dir: 'up'|'down'|'same' = 'same';
+              let diff = 0;
+              if (prevPos > 0 && currPos > 0) {
+                diff = prevPos - currPos;
+                dir = diff > 0 ? 'up' : diff < 0 ? 'down' : 'same';
+              }
+              return {
+                keyword: c.keyword!.keyword,
+                averageRank: currPos,
+                clicks: 0,
+                impressions: c.impressions || 0,
+                rankChange: Math.abs(diff),
+                rankChangeDirection: dir,
+              };
+            });
+          // Upsert fallback items to topKeywordData for persistence
+          for (const kw of fallbackItems) {
+            await prisma.topKeywordData.upsert({
+              where: { campaignId_keyword_month_year: { campaignId, keyword: kw.keyword, month: targetMonth, year: targetYear } },
+              update: { averageRank: kw.averageRank, clicks: kw.clicks, impressions: kw.impressions, rankChange: kw.rankChange, rankChangeDirection: kw.rankChangeDirection, fetchedAt: new Date() },
+              create: { campaignId, keyword: kw.keyword, month: targetMonth, year: targetYear, averageRank: kw.averageRank, clicks: kw.clicks, impressions: kw.impressions, rankChange: kw.rankChange, rankChangeDirection: kw.rankChangeDirection },
+            });
+          }
+        }
+
+        const dbItems = rows.map((r: any) => ({ keyword: r.keyword, averageRank: r.averageRank, clicks: r.clicks, impressions: r.impressions, rankChange: r.rankChange, rankChangeDirection: r.rankChangeDirection as 'up'|'down'|'same' }));
+        const merged = [...dbItems, ...fallbackItems]
+          .filter(k => (k.averageRank || 0) > 0)
+          .sort((a,b) => a.averageRank - b.averageRank)
+          .slice(0, limit);
+
+        return { keywords: merged };
       } catch (error) {
         console.error('Error in getTopKeywordsThisMonth:', error);
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to fetch top keywords for this month' });
