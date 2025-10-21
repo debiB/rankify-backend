@@ -3591,7 +3591,7 @@ getKeywordMovementStats: protectedProcedure
         const analytics = await prisma.searchConsoleTrafficAnalytics.findFirst({ where: { siteUrl: campaign.searchConsoleSite } });
         if (!analytics) {
           console.log('Analytics not found for site:', campaign.searchConsoleSite);
-          return { bestMonth: null, bestMonthClicks: 0, comparisonClicks: 0, improvementPercentage: 0 };
+          return { bestMonth: null, bestMonthClicks: 0, comparisonClicks: 0, improvementPercentage: 0, bestDay: null, bestDayClicks: 0 };
         }
 
         const today = new Date();
@@ -3611,12 +3611,28 @@ getKeywordMovementStats: protectedProcedure
         
         if (thisYearRows.length === 0) {
           console.log('No data for this year');
-          return { bestMonth: null, bestMonthClicks: 0, comparisonClicks: 0, improvementPercentage: 0 };
+          return { bestMonth: null, bestMonthClicks: 0, comparisonClicks: 0, improvementPercentage: 0, bestDay: null, bestDayClicks: 0 };
         }
 
         // Find the month with the highest clicks
         const best = thisYearRows.reduce((b, r) => (r.clicks > b.clicks ? r : b));
         console.log('Best month record:', best);
+        
+        // Find the best day in the best month
+        const dailyRows = await prisma.searchConsoleTrafficDaily.findMany({
+          where: { 
+            analyticsId: analytics.id, 
+            date: { 
+              gte: new Date(thisYear, best.month - 1, 1), 
+              lt: new Date(thisYear, best.month, 1) 
+            } 
+          },
+          orderBy: { clicks: 'desc' },
+        });
+        
+        const bestDayRecord = dailyRows.length > 0 ? dailyRows[0] : null;
+        const bestDay = bestDayRecord ? bestDayRecord.date.getDate() : null;
+        const bestDayClicks = bestDayRecord ? bestDayRecord.clicks : 0;
         
         const comparison = monthly.find((m) => m.year === lastYear && m.month === best.month);
         const comparisonClicks = comparison?.clicks || 0;
@@ -3639,6 +3655,8 @@ getKeywordMovementStats: protectedProcedure
           bestMonthClicks: best.clicks,
           comparisonClicks,
           improvementPercentage,
+          bestDay,
+          bestDayClicks,
         };
         
         console.log('Best Performing Month Debug:', result);
@@ -3647,6 +3665,68 @@ getKeywordMovementStats: protectedProcedure
       } catch (error) {
         console.error('Error in getBestPerformingMonth:', error);
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to get best performing month' });
+      }
+    }),
+
+  // Get top 4 best performing months with their total clicks and percentage contributions
+  getTop4BestPerformingMonths: protectedProcedure
+    .input(z.object({ campaignId: z.string().min(1) }))
+    .query(async ({ input, ctx }) => {
+      try {
+        console.log('getTop4BestPerformingMonths called with campaignId:', input.campaignId);
+        
+        const campaign = await prisma.campaign.findFirst({ where: { id: input.campaignId } });
+        if (!campaign) {
+          console.log('Campaign not found for ID:', input.campaignId);
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Campaign not found' });
+        }
+        
+        // Check if user has access to this campaign
+        if (ctx.user.role !== 'ADMIN' && campaign.userId !== ctx.user.id) {
+          console.log('User does not have access to campaign. User role:', ctx.user.role, 'User ID:', ctx.user.id, 'Campaign user ID:', campaign.userId);
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'You do not have access to this campaign' });
+        }
+
+        const analytics = await prisma.searchConsoleTrafficAnalytics.findFirst({ where: { siteUrl: campaign.searchConsoleSite } });
+        if (!analytics) {
+          console.log('Analytics not found for site:', campaign.searchConsoleSite);
+          return { top4Months: [] };
+        }
+
+        const today = new Date();
+        const thisYear = today.getFullYear();
+        
+        console.log('Checking data for year:', thisYear);
+
+        const monthly = await prisma.searchConsoleTrafficMonthly.findMany({
+          where: { analyticsId: analytics.id, year: thisYear },
+          orderBy: { clicks: 'desc' },
+          take: 4,
+        });
+        
+        console.log('Found', monthly.length, 'monthly records for top 4');
+
+        if (monthly.length === 0) {
+          console.log('No data for this year');
+          return { top4Months: [] };
+        }
+
+        // Calculate total clicks for the top 4 months
+        const totalClicks = monthly.reduce((sum, m) => sum + m.clicks, 0);
+        
+        // Calculate percentage contribution for each month
+        const top4Months = monthly.map((m) => ({
+          month: m.month,
+          clicks: m.clicks,
+          percentage: totalClicks > 0 ? Math.round((m.clicks / totalClicks) * 100) : 0,
+        }));
+        
+        console.log('Top 4 Months Debug:', { top4Months, totalClicks });
+
+        return { top4Months };
+      } catch (error) {
+        console.error('Error in getTop4BestPerformingMonths:', error);
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to get top 4 best performing months' });
       }
     }),
 
