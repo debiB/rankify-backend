@@ -2668,7 +2668,7 @@ export class AnalyticsService {
             calcWindowDays = topPageData.daysWithData;
           }
 
-          // Persist the computed metrics
+          // Persist the computed metrics (MonthlyStat)
           await prisma.searchConsoleKeywordMonthlyStat.upsert({
             where: {
               keywordId_month_year: {
@@ -2689,6 +2689,34 @@ export class AnalyticsService {
               topRankingPageUrl: topPageUrl,
               averageRank: monthlyPosition,
               searchVolume: totalImpressions, // Using impressions as search volume
+            },
+          });
+
+          // Persist computed metrics for CTR and fallback usage (MonthlyComputed)
+          await prisma.searchConsoleKeywordMonthlyComputed.upsert({
+            where: {
+              keywordId_month_year: {
+                keywordId: keyword.id,
+                month,
+                year,
+              },
+            },
+            update: {
+              topRankingPageUrl: topPageUrl,
+              averageRank: monthlyPosition,
+              impressions: totalImpressions,
+              clicks: totalClicks,
+              calcWindowDays: calcWindowDays,
+            },
+            create: {
+              keywordId: keyword.id,
+              month,
+              year,
+              topRankingPageUrl: topPageUrl,
+              averageRank: monthlyPosition,
+              impressions: totalImpressions,
+              clicks: totalClicks,
+              calcWindowDays: calcWindowDays,
             },
           });
 
