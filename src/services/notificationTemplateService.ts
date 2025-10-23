@@ -16,7 +16,7 @@ export class NotificationTemplateService {
     const subject = `Rank Update: ${campaignName} - ${improvedCount} improved, ${declinedCount} declined`;
     
     const html = `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <div style=" sans-serif; max-width: 600px; margin: 0 auto;">
         <h2 style="color: #333;">Ranking Update for ${campaignName}</h2>
         
         <div style="background: #f5f5f5; padding: 20px; border-radius: 8px; margin: 20px 0;">
@@ -131,7 +131,7 @@ This is an automated notification from Rank Ranger.
     const subject = `Milestone Alert: ${campaign} - ${milestone}`;
     
     const html = `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <div style=", sans-serif; max-width: 600px; margin: 0 auto;">
         <h2 style="color: #333;">Milestone Alert for ${campaign}</h2>
         
         <div style="background: #f5f5f5; padding: 20px; border-radius: 8px; margin: 20px 0;">
