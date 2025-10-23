@@ -582,3 +582,23 @@ enum KeywordCannibalizationAuditStatus {
   COMPLETED
   FAILED
 }
+
+// Lead capture for organic website/webhook submissions
+model Lead {
+  id           String   @id @default(cuid())
+  name         String
+  email        String
+  phone        String?
+  source       String   // e.g., "organic"
+  starRating   Int?     // 1-5
+  isDealClosed Boolean  @default(false) // נסגרה עסקה
+  dealAmount   Float?   // שיווי עסקה
+  utmSource    String?
+  utmMedium    String?
+  utmCampaign  String?
+  createdAt    DateTime @default(now())
+  submittedAt  DateTime? // from WP if supplied
+
+  @@index([email])
+  @@index([createdAt])
+}
