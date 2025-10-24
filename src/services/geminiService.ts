@@ -138,7 +138,7 @@ export class GeminiService {
       };
     } catch (error) {
       console.error('Error analyzing brand content with Gemini:', error);
-      throw new Error('Failed to analyze brand content');
+      throw new Error(`Failed to analyze brand content: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
@@ -174,7 +174,7 @@ export class GeminiService {
       return await this.analyzeBrandContent(content);
     } catch (error) {
       console.error('Error fetching or analyzing URL:', error);
-      throw new Error('Failed to analyze brand from URL');
+      throw new Error(`Failed to analyze brand from URL: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
@@ -205,7 +205,7 @@ export class GeminiService {
       return await this.analyzeBrandContent(content);
     } catch (error) {
       console.error('Error fetching or analyzing PDF:', error);
-      throw new Error('Failed to analyze brand from PDF');
+      throw new Error(`Failed to analyze brand from PDF: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 

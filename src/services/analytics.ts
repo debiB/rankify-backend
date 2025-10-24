@@ -98,7 +98,7 @@ export class AnalyticsService {
       return true;
     } catch (error) {
       console.error('Error fetching and saving daily data:', error);
-      return false;
+      throw new Error(`Failed to fetch and save daily data: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
@@ -156,7 +156,7 @@ export class AnalyticsService {
       return true;
     } catch (error) {
       console.error('Error fetching and saving historical daily data:', error);
-      return false;
+      throw new Error(`Failed to fetch historical daily data: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
@@ -210,7 +210,7 @@ export class AnalyticsService {
       return true;
     } catch (error) {
       console.error('Error fetching daily site traffic:', error);
-      return false;
+      throw new Error(`Failed to fetch daily site traffic: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
@@ -255,7 +255,7 @@ export class AnalyticsService {
       return true;
     } catch (error) {
       console.error('Error fetching monthly traffic data:', error);
-      return false;
+      throw new Error(`Failed to fetch monthly traffic data: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
@@ -373,7 +373,7 @@ export class AnalyticsService {
       return true;
     } catch (error) {
       console.error('Error fetching daily keyword data:', error);
-      return false;
+      throw new Error(`Failed to fetch daily keyword data: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 

@@ -204,6 +204,7 @@ export class CronService {
       console.log(`   📊 Total campaigns processed: ${results.length}`);
     } catch (error) {
       console.error('💥 Error in cannibalization audit job:', error);
+      throw new Error(`Failed to run cannibalization audits: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
@@ -314,6 +315,7 @@ export class CronService {
       console.log(`   📊 Total campaigns processed: ${results.length}`);
     } catch (error) {
       console.error('💥 Error in monthly analytics job:', error);
+      throw new Error(`Failed to fetch monthly analytics: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
@@ -425,6 +427,7 @@ export class CronService {
       console.log(`   📊 Total campaigns processed: ${results.length}`);
     } catch (error) {
       console.error('💥 Error in daily traffic job:', error);
+      throw new Error(`Failed to fetch daily traffic: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
@@ -470,6 +473,7 @@ export class CronService {
       }
     } catch (error) {
       console.error('💥 Error in milestone check job:', error);
+      throw new Error(`Failed to check milestones: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
@@ -678,6 +682,7 @@ export class CronService {
       console.log(`   📊 Total campaigns processed: ${results.length}`);
     } catch (error) {
       console.error('💥 Error in top keywords job:', error);
+      throw new Error(`Failed to fetch top keywords: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 

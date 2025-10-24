@@ -97,7 +97,7 @@ export class GoogleSearchService {
       };
     } catch (error) {
       console.error('Error searching keyword with Google Search:', error);
-      return null;
+      throw new Error(`Failed to search keyword "${keyword}": ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 

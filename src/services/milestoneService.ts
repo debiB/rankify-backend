@@ -61,101 +61,111 @@ export class MilestoneService {
   async checkAllCampaignMilestones(): Promise<MilestoneCheckResult[]> {
     console.log('🎯 Starting milestone check for all active campaigns...');
 
-    const activeCampaigns = await prisma.campaign.findMany({
-      where: { status: 'ACTIVE' },
-      include: {
-        milestonePreferences: {
-          include: {
-            milestoneType: true,
+    try {
+      const activeCampaigns = await prisma.campaign.findMany({
+        where: { status: 'ACTIVE' },
+        include: {
+          milestonePreferences: {
+            include: {
+              milestoneType: true,
+            },
+          },
+          campaignUsers: {
+            include: {
+              user: true,
+            },
+          },
+          campaignGroups: {
+            include: {
+              whatsAppGroup: true,
+            },
           },
         },
-        campaignUsers: {
-          include: {
-            user: true,
-          },
-        },
-        campaignGroups: {
-          include: {
-            whatsAppGroup: true,
-          },
-        },
-      },
-    });
+      });
 
-    console.log(`📊 Found ${activeCampaigns.length} active campaigns`);
+      console.log(`📊 Found ${activeCampaigns.length} active campaigns`);
 
-    const results: MilestoneCheckResult[] = [];
+      const results: MilestoneCheckResult[] = [];
 
-    for (const campaign of activeCampaigns) {
-      try {
-        const result = await this.checkCampaignMilestones(campaign.id);
-        results.push(result);
-      } catch (error) {
-        console.error(`Error checking milestones for campaign ${campaign.name}:`, error);
-        results.push({
-          campaignId: campaign.id,
-          campaignName: campaign.name,
-          milestonesAchieved: 0,
-          notificationsSent: 0,
-          errors: [error instanceof Error ? error.message : 'Unknown error'],
-        });
+      for (const campaign of activeCampaigns) {
+        try {
+          const result = await this.checkCampaignMilestones(campaign.id);
+          results.push(result);
+        } catch (error) {
+          console.error(`Error checking milestones for campaign ${campaign.name}:`, error);
+          results.push({
+            campaignId: campaign.id,
+            campaignName: campaign.name,
+            milestonesAchieved: 0,
+            notificationsSent: 0,
+            errors: [error instanceof Error ? error.message : 'Unknown error'],
+          });
+        }
       }
-    }
 
-    return results;
+      return results;
+    } catch (error) {
+      console.error('Error fetching active campaigns:', error);
+      throw new Error(`Failed to check campaign milestones: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
   }
 
   /**
    * Check milestones for a specific campaign
    */
   async checkCampaignMilestones(campaignId: string): Promise<MilestoneCheckResult> {
-    const campaign = await prisma.campaign.findUnique({
-      where: { id: campaignId },
-      include: {
-        milestonePreferences: {
-          where: { isActive: true },
-          include: {
-            milestoneType: true,
+    try {
+      const campaign = await prisma.campaign.findUnique({
+        where: { id: campaignId },
+        include: {
+          milestonePreferences: {
+            where: { isActive: true },
+            include: {
+              milestoneType: true,
+            },
+          },
+          campaignUsers: {
+            where: { isActive: true },
+            include: {
+              user: true,
+            },
+          },
+          campaignGroups: {
+            where: { isActive: true },
+            include: {
+              whatsAppGroup: true,
+            },
           },
         },
-        campaignUsers: {
-          where: { isActive: true },
-          include: {
-            user: true,
-          },
-        },
-        campaignGroups: {
-          where: { isActive: true },
-          include: {
-            whatsAppGroup: true,
-          },
-        },
-      },
-    });
+      });
 
-    if (!campaign) {
-      throw new Error(`Campaign not found: ${campaignId}`);
+      if (!campaign) {
+        throw new Error(`Campaign not found: ${campaignId}`);
+      }
+
+      const result: MilestoneCheckResult = {
+        campaignId: campaign.id,
+        campaignName: campaign.name,
+        milestonesAchieved: 0,
+        notificationsSent: 0,
+        errors: [],
+      };
+
+      console.log(`🔍 Checking milestones for campaign: ${campaign.name}`);
+
+      // Check position milestones
+      await this.checkPositionMilestones(campaign, result);
+
+      // Check click milestones
+      await this.checkClickMilestones(campaign, result);
+
+      console.log(`✅ Milestone check completed for ${campaign.name}: ${result.milestonesAchieved} achieved, ${result.notificationsSent} notifications sent`);
+
+      return result;
+    } catch (error) {
+      console.error(`Error checking milestones for campaign ${campaignId}:`, error);
+      throw new Error(`Failed to check campaign milestones: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
-
-    const result: MilestoneCheckResult = {
-      campaignId: campaign.id,
-      campaignName: campaign.name,
-      milestonesAchieved: 0,
-      notificationsSent: 0,
-      errors: [],
-    };
-
-    console.log(`🔍 Checking milestones for campaign: ${campaign.name}`);
-
-    // Check position milestones
-    await this.checkPositionMilestones(campaign, result);
-
-    // Check click milestones
-    await this.checkClickMilestones(campaign, result);
-
-    console.log(`✅ Milestone check completed for ${campaign.name}: ${result.milestonesAchieved} achieved, ${result.notificationsSent} notifications sent`);
-
-    return result;
   }
 
   /**
@@ -565,24 +575,29 @@ export class MilestoneService {
    * Initialize default milestone types
    */
   async initializeDefaultMilestoneTypes(): Promise<void> {
-    const defaultMilestones = [
-      { name: 'position_1', displayName: 'Position 1', type: MilestoneCategory.POSITION, position: 1 },
-      { name: 'position_2', displayName: 'Position 2', type: MilestoneCategory.POSITION, position: 2 },
-      { name: 'position_3', displayName: 'Position 3', type: MilestoneCategory.POSITION, position: 3 },
-      { name: 'clicks_100', displayName: '100 Clicks', type: MilestoneCategory.CLICKS, threshold: 100 },
-      { name: 'clicks_500', displayName: '500 Clicks', type: MilestoneCategory.CLICKS, threshold: 500 },
-      { name: 'clicks_1000', displayName: '1,000 Clicks', type: MilestoneCategory.CLICKS, threshold: 1000 },
-      { name: 'clicks_5000', displayName: '5,000 Clicks', type: MilestoneCategory.CLICKS, threshold: 5000 },
-    ];
+    try {
+      const defaultMilestones = [
+        { name: 'position_1', displayName: 'Position 1', type: MilestoneCategory.POSITION, position: 1 },
+        { name: 'position_2', displayName: 'Position 2', type: MilestoneCategory.POSITION, position: 2 },
+        { name: 'position_3', displayName: 'Position 3', type: MilestoneCategory.POSITION, position: 3 },
+        { name: 'clicks_100', displayName: '100 Clicks', type: MilestoneCategory.CLICKS, threshold: 100 },
+        { name: 'clicks_500', displayName: '500 Clicks', type: MilestoneCategory.CLICKS, threshold: 500 },
+        { name: 'clicks_1000', displayName: '1,000 Clicks', type: MilestoneCategory.CLICKS, threshold: 1000 },
+        { name: 'clicks_5000', displayName: '5,000 Clicks', type: MilestoneCategory.CLICKS, threshold: 5000 },
+      ];
 
-    for (const milestone of defaultMilestones) {
-      await prisma.milestoneType.upsert({
-        where: { name: milestone.name },
-        update: {},
-        create: milestone,
-      });
+      for (const milestone of defaultMilestones) {
+        await prisma.milestoneType.upsert({
+          where: { name: milestone.name },
+          update: {},
+          create: milestone,
+        });
+      }
+
+      console.log('✅ Default milestone types initialized');
+    } catch (error) {
+      console.error('Error initializing default milestone types:', error);
+      throw new Error(`Failed to initialize default milestone types: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
-
-    console.log('✅ Default milestone types initialized');
   }
 }

@@ -40,57 +40,62 @@ export const usersRouter = router({
       })
     )
     .query(async ({ input }) => {
-      const { page, limit, search, roleFilter, statusFilter } = input;
-      const skip = (page - 1) * limit;
+      try {
+        const { page, limit, search, roleFilter, statusFilter } = input;
+        const skip = (page - 1) * limit;
 
-      // Build where clause for filtering
-      const where: any = {};
+        // Build where clause for filtering
+        const where: any = {};
 
-      if (search) {
-        where.OR = [
-          { email: { contains: search } },
-          { name: { contains: search } },
-        ];
+        if (search) {
+          where.OR = [
+            { email: { contains: search } },
+            { name: { contains: search } },
+          ];
+        }
+
+        if (roleFilter !== 'all') {
+          where.role = roleFilter;
+        }
+
+        if (statusFilter !== 'all') {
+          where.status = statusFilter;
+        }
+
+        // Get total count for pagination
+        const totalCount = await prisma.user.count({ where });
+
+        // Get paginated users
+        const users = await prisma.user.findMany({
+          where,
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            role: true,
+            status: true,
+            createdAt: true,
+          },
+          skip,
+          take: limit,
+          orderBy: { createdAt: 'desc' },
+        });
+
+        return {
+          users,
+          pagination: {
+            page,
+            limit,
+            totalCount,
+            totalPages: Math.ceil(totalCount / limit),
+            hasNextPage: page < Math.ceil(totalCount / limit),
+            hasPrevPage: page > 1,
+          },
+        };
+      } catch (error) {
+        console.error('Get users error:', error);
+        throw new Error('Failed to fetch users. Please try again.');
       }
-
-      if (roleFilter !== 'all') {
-        where.role = roleFilter;
-      }
-
-      if (statusFilter !== 'all') {
-        where.status = statusFilter;
-      }
-
-      // Get total count for pagination
-      const totalCount = await prisma.user.count({ where });
-
-      // Get paginated users
-      const users = await prisma.user.findMany({
-        where,
-        select: {
-          id: true,
-          email: true,
-          name: true,
-          role: true,
-          status: true,
-          createdAt: true,
-        },
-        skip,
-        take: limit,
-        orderBy: { createdAt: 'desc' },
-      });
-
-      return {
-        users,
-        pagination: {
-          page,
-          limit,
-          totalCount,
-          totalPages: Math.ceil(totalCount / limit),
-          hasNextPage: page < Math.ceil(totalCount / limit),
-          hasPrevPage: page > 1,
-        },
-      };
     }),
 
   createUser: adminProcedure
@@ -103,53 +108,61 @@ export const usersRouter = router({
       })
     )
     .mutation(async ({ input }) => {
-      const existingUser = await prisma.user.findUnique({
-        where: { email: input.email },
-      });
-
-      if (existingUser) {
-        throw new Error('User already exists');
-      }
-
-      // Generate a temporary password
-      const tempPassword =
-        Math.random().toString(36).slice(-8) +
-        Math.random().toString(36).slice(-8);
-      const hashedPassword = await hashPassword(tempPassword);
-
-      const user = await prisma.user.create({
-        data: {
-          email: input.email,
-          password: hashedPassword,
-          name: input.name,
-          role: input.role,
-          status: input.status,
-          hasChangedPassword: false,
-        },
-        select: {
-          id: true,
-          email: true,
-          name: true,
-          role: true,
-          status: true,
-          hasChangedPassword: true,
-          createdAt: true,
-        },
-      });
-
-      // Send email with temporary password
       try {
-        await sendTemporaryPassword(
-          user.email,
-          user.name || 'User',
-          tempPassword
-        );
-      } catch (error) {
-        console.error('Failed to send email:', error);
-        // Don't fail the user creation if email fails
-      }
+        const existingUser = await prisma.user.findUnique({
+          where: { email: input.email },
+        });
 
-      return user;
+        if (existingUser) {
+          throw new Error('User already exists');
+        }
+
+        // Generate a temporary password
+        const tempPassword =
+          Math.random().toString(36).slice(-8) +
+          Math.random().toString(36).slice(-8);
+        const hashedPassword = await hashPassword(tempPassword);
+
+        const user = await prisma.user.create({
+          data: {
+            email: input.email,
+            password: hashedPassword,
+            name: input.name,
+            role: input.role,
+            status: input.status,
+            hasChangedPassword: false,
+          },
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            role: true,
+            status: true,
+            hasChangedPassword: true,
+            createdAt: true,
+          },
+        });
+
+        // Send email with temporary password
+        try {
+          await sendTemporaryPassword(
+            user.email,
+            user.name || 'User',
+            tempPassword
+          );
+        } catch (error) {
+          console.error('Failed to send email:', error);
+          // Don't fail the user creation if email fails
+        }
+
+        return user;
+      } catch (error) {
+        console.error('Create user error:', error);
+        if (error instanceof Error && error.message === 'User already exists') {
+          throw error;
+        }
+        throw new Error('Failed to create user. Please try again.');
+      }
     }),
 
   updateUser: adminProcedure
@@ -163,37 +176,45 @@ export const usersRouter = router({
       })
     )
     .mutation(async ({ input }) => {
-      // Check if email is already taken by another user
-      const existingUser = await prisma.user.findFirst({
-        where: {
-          email: input.email,
-          id: { not: input.userId },
-        },
-      });
+      try {
+        // Check if email is already taken by another user
+        const existingUser = await prisma.user.findFirst({
+          where: {
+            email: input.email,
+            id: { not: input.userId },
+          },
+        });
 
-      if (existingUser) {
-        throw new Error('Email is already taken by another user');
+        if (existingUser) {
+          throw new Error('Email is already taken by another user');
+        }
+
+        const user = await prisma.user.update({
+          where: { id: input.userId },
+          data: {
+            name: input.name,
+            email: input.email,
+            role: input.role,
+            status: input.status,
+          },
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            role: true,
+            status: true,
+            createdAt: true,
+          },
+        });
+
+        return user;
+      } catch (error) {
+        console.error('Update user error:', error);
+        if (error instanceof Error && error.message === 'Email is already taken by another user') {
+          throw error;
+        }
+        throw new Error('Failed to update user. Please try again.');
       }
-
-      const user = await prisma.user.update({
-        where: { id: input.userId },
-        data: {
-          name: input.name,
-          email: input.email,
-          role: input.role,
-          status: input.status,
-        },
-        select: {
-          id: true,
-          email: true,
-          name: true,
-          role: true,
-          status: true,
-          createdAt: true,
-        },
-      });
-
-      return user;
     }),
 
   updateUserStatus: adminProcedure
@@ -204,25 +225,33 @@ export const usersRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      // Prevent admin from deactivating their own account
-      if (ctx.user?.id === input.userId && input.status === 'INACTIVE') {
-        throw new Error('You cannot deactivate your own account');
+      try {
+        // Prevent admin from deactivating their own account
+        if (ctx.user?.id === input.userId && input.status === 'INACTIVE') {
+          throw new Error('You cannot deactivate your own account');
+        }
+
+        const user = await prisma.user.update({
+          where: { id: input.userId },
+          data: { status: input.status },
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            role: true,
+            status: true,
+            createdAt: true,
+          },
+        });
+
+        return user;
+      } catch (error) {
+        console.error('Update user status error:', error);
+        if (error instanceof Error && error.message === 'You cannot deactivate your own account') {
+          throw error;
+        }
+        throw new Error('Failed to update user status. Please try again.');
       }
-
-      const user = await prisma.user.update({
-        where: { id: input.userId },
-        data: { status: input.status },
-        select: {
-          id: true,
-          email: true,
-          name: true,
-          role: true,
-          status: true,
-          createdAt: true,
-        },
-      });
-
-      return user;
     }),
 
   deleteUser: adminProcedure
@@ -232,16 +261,24 @@ export const usersRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      // Prevent admin from deleting their own account
-      if (ctx.user?.id === input.userId) {
-        throw new Error('You cannot delete your own account');
+      try {
+        // Prevent admin from deleting their own account
+        if (ctx.user?.id === input.userId) {
+          throw new Error('You cannot delete your own account');
+        }
+
+        await prisma.user.delete({
+          where: { id: input.userId },
+        });
+
+        return { success: true };
+      } catch (error) {
+        console.error('Delete user error:', error);
+        if (error instanceof Error && error.message === 'You cannot delete your own account') {
+          throw error;
+        }
+        throw new Error('Failed to delete user. Please try again.');
       }
-
-      await prisma.user.delete({
-        where: { id: input.userId },
-      });
-
-      return { success: true };
     }),
 
   changePassword: protectedProcedure
