@@ -250,13 +250,36 @@ export class ContentGenerationService {
           : JSON.stringify(data.qnaSections);
       }
 
-      await prisma.generatedContent.update({
+      const generatedContent = await prisma.generatedContent.update({
         where: { id },
         data: updateData
       });
       
-      // Get the updated content with proper parsing
-      return await this.getGeneratedContentById(id);
+      // Parse and return the updated content
+      let articleContent: ContentBlock[] = [];
+      try {
+        if (generatedContent.articleContent) {
+          const raw = JSON.parse(String(generatedContent.articleContent));
+          articleContent = Array.isArray(raw) ? raw.map((b: any) => ({
+            headingType: (String(b.headingType ?? b.heading_type ?? 'h2').toLowerCase()) as 'h1'|'h2'|'h3',
+            headingText: String(b.headingText ?? b.heading_text ?? ''),
+            bodyText: String(b.bodyText ?? b.body_text ?? ''),
+          })) : [];
+        }
+      } catch {}
+      
+      return {
+        id: generatedContent.id,
+        contentPlanId: generatedContent.contentPlanId,
+        articleContent,
+        style: generatedContent.style || '',
+        intro: generatedContent.intro || '',
+        qnaSections: (() => { try { return JSON.parse(String(generatedContent.qnaSections)); } catch { return []; } })(),
+        externalLink: generatedContent.externalLink,
+        finalized: generatedContent.finalized,
+        createdAt: generatedContent.createdAt,
+        updatedAt: generatedContent.updatedAt
+      };
     } catch (error) {
       console.error('Error updating generated content:', error);
       throw new Error(`Failed to update generated content: ${error instanceof Error ? error.message : 'Unknown error'}`);

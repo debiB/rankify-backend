@@ -516,7 +516,7 @@ export class KeywordAnalysisService {
       return result.id;
     } catch (error) {
       console.error('Error storing analysis:', error);
-      throw new Error('Failed to store keyword analysis');
+      throw new Error(`Failed to store keyword analysis: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
   
@@ -554,7 +554,7 @@ export class KeywordAnalysisService {
       };
     } catch (error) {
       console.error('Error retrieving analysis:', error);
-      throw new Error('Failed to retrieve keyword analysis');
+      throw new Error(`Failed to retrieve keyword analysis: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 }

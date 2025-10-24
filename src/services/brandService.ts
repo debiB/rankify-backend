@@ -32,194 +32,224 @@ export class BrandService {
    * Create a new brand profile with initial analysis
    */
   async createBrandProfile(input: CreateBrandProfileInput) {
-    // Analyze all provided resources
-    const toneData = await this.analyzeBrandResources(input.urls, input.pdfs, input.otherDocs);
-    
-    // Create the brand profile in the database
-    const brandProfile = await prisma.brandProfile.create({
-      data: {
-        name: input.name,
-        toneData: toneData as any,
-        lastUpdated: new Date(),
-        createdAt: new Date(),
-        urls: {
-          create: input.urls.map(url => ({ url }))
-        },
-        pdfs: {
-          create: input.pdfs.map(pdf => ({ url: pdf }))
-        },
-        otherDocs: {
-          create: input.otherDocs.map(doc => ({ url: doc }))
+    try {
+      // Analyze all provided resources
+      const toneData = await this.analyzeBrandResources(input.urls, input.pdfs, input.otherDocs);
+      
+      // Create the brand profile in the database
+      const brandProfile = await prisma.brandProfile.create({
+        data: {
+          name: input.name,
+          toneData: toneData as any,
+          lastUpdated: new Date(),
+          createdAt: new Date(),
+          urls: {
+            create: input.urls.map(url => ({ url }))
+          },
+          pdfs: {
+            create: input.pdfs.map(pdf => ({ url: pdf }))
+          },
+          otherDocs: {
+            create: input.otherDocs.map(doc => ({ url: doc }))
+          }
+        } as any,
+        include: {
+          urls: true,
+          pdfs: true,
+          otherDocs: true
         }
-      } as any,
-      include: {
-        urls: true,
-        pdfs: true,
-        otherDocs: true
-      }
-    });
-    
-    return brandProfile;
+      });
+      
+      return brandProfile;
+    } catch (error) {
+      console.error('Create brand profile error:', error);
+      throw new Error('Failed to create brand profile. Please try again.');
+    }
   }
 
   /**
    * Get a brand profile by ID
    */
   async getBrandProfile(id: string) {
-    return await prisma.brandProfile.findUnique({
-      where: { id },
-      include: {
-        urls: true,
-        pdfs: true,
-        otherDocs: true
-      }
-    });
+    try {
+      return await prisma.brandProfile.findUnique({
+        where: { id },
+        include: {
+          urls: true,
+          pdfs: true,
+          otherDocs: true
+        }
+      });
+    } catch (error) {
+      console.error('Get brand profile error:', error);
+      throw new Error('Failed to get brand profile. Please try again.');
+    }
   }
 
   /**
    * Get all brand profiles - returns only the latest profile per brand name
    */
   async getAllBrandProfiles() {
-    // Get all brand profiles ordered by name and lastUpdated
-    const allProfiles = await prisma.brandProfile.findMany({
-      include: {
-        urls: true,
-        pdfs: true,
-        otherDocs: true
-      },
-      orderBy: [
-        { name: 'asc' },
-        { lastUpdated: 'desc' }
-      ]
-    });
-    
-    // Filter to get only the latest profile per brand name
-    const distinctBrands = new Map();
-    for (const profile of allProfiles) {
-      if (!distinctBrands.has(profile.name)) {
-        distinctBrands.set(profile.name, profile);
+    try {
+      // Get all brand profiles ordered by name and lastUpdated
+      const allProfiles = await prisma.brandProfile.findMany({
+        include: {
+          urls: true,
+          pdfs: true,
+          otherDocs: true
+        },
+        orderBy: [
+          { name: 'asc' },
+          { lastUpdated: 'desc' }
+        ]
+      });
+      
+      // Filter to get only the latest profile per brand name
+      const distinctBrands = new Map();
+      for (const profile of allProfiles) {
+        if (!distinctBrands.has(profile.name)) {
+          distinctBrands.set(profile.name, profile);
+        }
       }
+      
+      return Array.from(distinctBrands.values());
+    } catch (error) {
+      console.error('Get all brand profiles error:', error);
+      throw new Error('Failed to get brand profiles. Please try again.');
     }
-    
-    return Array.from(distinctBrands.values());
   }
 
   /**
    * Get detailed analysis results for a brand profile
    */
   async getDetailedBrandAnalysis(id: string) {
-    const brandProfile = await this.getBrandProfile(id);
-    
-    if (!brandProfile) {
-      throw new Error('Brand profile not found');
+    try {
+      const brandProfile = await this.getBrandProfile(id);
+      
+      if (!brandProfile) {
+        throw new Error('Brand profile not found');
+      }
+      
+      // Get individual resource analyses
+      const individualAnalyses = await this.analyzeIndividualResources(
+        brandProfile.urls.map((url: { url: string }) => url.url),
+        brandProfile.pdfs.map((pdf: { url: string }) => pdf.url),
+        brandProfile.otherDocs.map((doc: { url: string }) => doc.url)
+      );
+      
+      return {
+        brandProfile,
+        individualAnalyses
+      };
+    } catch (error) {
+      console.error('Get detailed brand analysis error:', error);
+      throw new Error(`Failed to get detailed brand analysis: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
-    
-    // Get individual resource analyses
-    const individualAnalyses = await this.analyzeIndividualResources(
-      brandProfile.urls.map((url: { url: string }) => url.url),
-      brandProfile.pdfs.map((pdf: { url: string }) => pdf.url),
-      brandProfile.otherDocs.map((doc: { url: string }) => doc.url)
-    );
-    
-    return {
-      brandProfile,
-      individualAnalyses
-    };
   }
 
   /**
    * Update a brand profile
    */
   async updateBrandProfile(input: UpdateBrandProfileInput) {
-    const data: any = {};
-    
-    if (input.name) {
-      data.name = input.name;
-    }
-    
-    if (input.toneData) {
-      data.toneData = input.toneData as any;
-    }
-    
-    // Always update the lastUpdated field
-    data.lastUpdated = new Date();
-    
-    // Update associated resources if provided
-    if (input.urls) {
-      // Remove existing URLs and add new ones
-      await prisma.brandProfileUrl.deleteMany({
-        where: { brandProfileId: input.id }
-      });
+    try {
+      const data: any = {};
       
-      data.urls = {
-        create: input.urls.map(url => ({ url }))
-      };
-    }
-    
-    if (input.pdfs) {
-      // Remove existing PDFs and add new ones
-      await prisma.brandProfilePdf.deleteMany({
-        where: { brandProfileId: input.id }
-      });
-      
-      data.pdfs = {
-        create: input.pdfs.map(pdf => ({ url: pdf }))
-      };
-    }
-    
-    if (input.otherDocs) {
-      // Remove existing documents and add new ones
-      await prisma.brandProfileOtherDoc.deleteMany({
-        where: { brandProfileId: input.id }
-      });
-      
-      data.otherDocs = {
-        create: input.otherDocs.map(doc => ({ url: doc }))
-      };
-    }
-    
-    return await prisma.brandProfile.update({
-      where: { id: input.id },
-      data,
-      include: {
-        urls: true,
-        pdfs: true,
-        otherDocs: true
+      if (input.name) {
+        data.name = input.name;
       }
-    });
+      
+      if (input.toneData) {
+        data.toneData = input.toneData as any;
+      }
+      
+      // Always update the lastUpdated field
+      data.lastUpdated = new Date();
+      
+      // Update associated resources if provided
+      if (input.urls) {
+        // Remove existing URLs and add new ones
+        await prisma.brandProfileUrl.deleteMany({
+          where: { brandProfileId: input.id }
+        });
+        
+        data.urls = {
+          create: input.urls.map(url => ({ url }))
+        };
+      }
+      
+      if (input.pdfs) {
+        // Remove existing PDFs and add new ones
+        await prisma.brandProfilePdf.deleteMany({
+          where: { brandProfileId: input.id }
+        });
+        
+        data.pdfs = {
+          create: input.pdfs.map(pdf => ({ url: pdf }))
+        };
+      }
+      
+      if (input.otherDocs) {
+        // Remove existing documents and add new ones
+        await prisma.brandProfileOtherDoc.deleteMany({
+          where: { brandProfileId: input.id }
+        });
+        
+        data.otherDocs = {
+          create: input.otherDocs.map(doc => ({ url: doc }))
+        };
+      }
+      
+      return await prisma.brandProfile.update({
+        where: { id: input.id },
+        data,
+        include: {
+          urls: true,
+          pdfs: true,
+          otherDocs: true
+        }
+      });
+    } catch (error) {
+      console.error('Update brand profile error:', error);
+      throw new Error('Failed to update brand profile. Please try again.');
+    }
   }
 
   /**
-   * Re-analyze all brand resources to update the tone data
+   * Re-analyze a brand profile with fresh data
    */
   async reanalyzeBrandProfile(id: string) {
-    const brandProfile = await this.getBrandProfile(id);
-    
-    if (!brandProfile) {
-      throw new Error('Brand profile not found');
-    }
-    
-    // Extract URLs, PDFs, and other documents from the brand profile
-    const urls = brandProfile.urls.map((url: { url: string }) => url.url);
-    const pdfs = brandProfile.pdfs.map((pdf: { url: string }) => pdf.url);
-    const otherDocs = brandProfile.otherDocs.map((doc: { url: string }) => doc.url);
-    
-    // Analyze all resources
-    const toneData = await this.analyzeBrandResources(urls, pdfs, otherDocs);
-    
-    // Update the brand profile with new tone data
-    return await prisma.brandProfile.update({
-      where: { id },
-      data: {
-        toneData: toneData as any,
-        lastUpdated: new Date()
-      } as any,
-      include: {
-        urls: true,
-        pdfs: true,
-        otherDocs: true
+    try {
+      const brandProfile = await this.getBrandProfile(id);
+      
+      if (!brandProfile) {
+        throw new Error('Brand profile not found');
       }
-    });
+      
+      // Extract URLs, PDFs, and other documents from the brand profile
+      const urls = brandProfile.urls.map((url: { url: string }) => url.url);
+      const pdfs = brandProfile.pdfs.map((pdf: { url: string }) => pdf.url);
+      const otherDocs = brandProfile.otherDocs.map((doc: { url: string }) => doc.url);
+      
+      // Analyze all resources
+      const toneData = await this.analyzeBrandResources(urls, pdfs, otherDocs);
+      
+      // Update the brand profile with new tone data
+      return await prisma.brandProfile.update({
+        where: { id },
+        data: {
+          toneData: toneData as any,
+          lastUpdated: new Date()
+        } as any,
+        include: {
+          urls: true,
+          pdfs: true,
+          otherDocs: true
+        }
+      });
+    } catch (error) {
+      console.error('Re-analyze brand profile error:', error);
+      throw new Error(`Failed to re-analyze brand profile: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
   }
 
   /**

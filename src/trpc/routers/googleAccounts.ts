@@ -17,50 +17,58 @@ export const googleAccountsRouter = router({
       })
     )
     .query(async ({ input }) => {
-      const { page, limit, search } = input;
-      const skip = (page - 1) * limit;
+      try {
+        const { page, limit, search } = input;
+        const skip = (page - 1) * limit;
 
-      // Build where clause for filtering
-      const where: any = {};
+        // Build where clause for filtering
+        const where: any = {};
 
-      if (search) {
-        where.OR = [
-          { email: { contains: search } },
-          { accountName: { contains: search } },
-        ];
+        if (search) {
+          where.OR = [
+            { email: { contains: search } },
+            { accountName: { contains: search } },
+          ];
+        }
+
+        // Get total count for pagination
+        const totalCount = await prisma.googleAccount.count({ where });
+
+        // Get paginated accounts
+        const accounts = await prisma.googleAccount.findMany({
+          where,
+          select: {
+            id: true,
+            email: true,
+            accountName: true,
+            isActive: true,
+            expiresAt: true,
+            createdAt: true,
+            updatedAt: true,
+          },
+          skip,
+          take: limit,
+          orderBy: { createdAt: 'desc' },
+        });
+
+        return {
+          accounts,
+          pagination: {
+            page,
+            limit,
+            totalCount,
+            totalPages: Math.ceil(totalCount / limit),
+            hasNextPage: page < Math.ceil(totalCount / limit),
+            hasPrevPage: page > 1,
+          },
+        };
+      } catch (error) {
+        console.error('Error fetching Google accounts:', error);
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to fetch Google accounts',
+        });
       }
-
-      // Get total count for pagination
-      const totalCount = await prisma.googleAccount.count({ where });
-
-      // Get paginated accounts
-      const accounts = await prisma.googleAccount.findMany({
-        where,
-        select: {
-          id: true,
-          email: true,
-          accountName: true,
-          isActive: true,
-          expiresAt: true,
-          createdAt: true,
-          updatedAt: true,
-        },
-        skip,
-        take: limit,
-        orderBy: { createdAt: 'desc' },
-      });
-
-      return {
-        accounts,
-        pagination: {
-          page,
-          limit,
-          totalCount,
-          totalPages: Math.ceil(totalCount / limit),
-          hasNextPage: page < Math.ceil(totalCount / limit),
-          hasPrevPage: page > 1,
-        },
-      };
     }),
 
   updateAccount: adminProcedure
@@ -72,69 +80,92 @@ export const googleAccountsRouter = router({
       })
     )
     .mutation(async ({ input }) => {
-      const { id, ...updateData } = input;
+      try {
+        const { id, ...updateData } = input;
 
-      // If trying to activate account, check if refresh token is valid
-      if (updateData.isActive === true) {
-        const existingAccount = await prisma.googleAccount.findUnique({
-          where: { id },
-        });
-
-        if (!existingAccount) {
-          throw new Error('Account not found');
-        }
-
-        // Test if refresh token is valid by attempting to refresh
-        try {
-          const oauth2Client = new google.auth.OAuth2(
-            process.env.GOOGLE_CLIENT_ID,
-            process.env.GOOGLE_CLIENT_SECRET,
-            process.env.GOOGLE_REDIRECT_URI ||
-              'http://localhost:3001/auth/google/callback'
-          );
-
-          oauth2Client.setCredentials({
-            refresh_token: existingAccount.refreshToken,
+        // If trying to activate account, check if refresh token is valid
+        if (updateData.isActive === true) {
+          const existingAccount = await prisma.googleAccount.findUnique({
+            where: { id },
           });
 
-          // Try to refresh the token to validate it
-          await oauth2Client.refreshAccessToken();
-        } catch (error: any) {
-          // If refresh token is invalid, don't allow activation
-          if (error?.response?.data?.error === 'invalid_grant') {
-            throw new Error(
-              `Cannot activate account: Refresh token is invalid. Please reconnect your Google account first.`
-            );
+          if (!existingAccount) {
+            throw new TRPCError({
+              code: 'NOT_FOUND',
+              message: 'Account not found',
+            });
           }
-          // For other errors, still allow activation (might be temporary network issues)
+
+          // Test if refresh token is valid by attempting to refresh
+          try {
+            const oauth2Client = new google.auth.OAuth2(
+              process.env.GOOGLE_CLIENT_ID,
+              process.env.GOOGLE_CLIENT_SECRET,
+              process.env.GOOGLE_REDIRECT_URI ||
+                'http://localhost:3001/auth/google/callback'
+            );
+
+            oauth2Client.setCredentials({
+              refresh_token: existingAccount.refreshToken,
+            });
+
+            // Try to refresh the token to validate it
+            await oauth2Client.refreshAccessToken();
+          } catch (error: any) {
+            // If refresh token is invalid, don't allow activation
+            if (error?.response?.data?.error === 'invalid_grant') {
+              throw new TRPCError({
+                code: 'BAD_REQUEST',
+                message: 'Cannot activate account: Refresh token is invalid. Please reconnect your Google account first.',
+              });
+            }
+            // For other errors, still allow activation (might be temporary network issues)
+          }
         }
+
+        const account = await prisma.googleAccount.update({
+          where: { id },
+          data: updateData,
+          select: {
+            id: true,
+            email: true,
+            accountName: true,
+            isActive: true,
+            expiresAt: true,
+            createdAt: true,
+            updatedAt: true,
+          },
+        });
+
+        return account;
+      } catch (error) {
+        console.error('Error updating Google account:', error);
+        if (error instanceof TRPCError) {
+          throw error;
+        }
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to update Google account',
+        });
       }
-
-      const account = await prisma.googleAccount.update({
-        where: { id },
-        data: updateData,
-        select: {
-          id: true,
-          email: true,
-          accountName: true,
-          isActive: true,
-          expiresAt: true,
-          createdAt: true,
-          updatedAt: true,
-        },
-      });
-
-      return account;
     }),
 
   deleteAccount: adminProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input }) => {
-      await prisma.googleAccount.delete({
-        where: { id: input.id },
-      });
+      try {
+        await prisma.googleAccount.delete({
+          where: { id: input.id },
+        });
 
-      return { success: true };
+        return { success: true };
+      } catch (error) {
+        console.error('Error deleting Google account:', error);
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to delete Google account',
+        });
+      }
     }),
 
   refreshToken: adminProcedure

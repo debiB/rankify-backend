@@ -83,7 +83,7 @@ export class SearchConsoleService {
       }));
     } catch (error) {
       console.error('Error fetching Search Console sites:', error);
-      throw new Error('Failed to fetch Search Console sites');
+      throw new Error(`Failed to fetch Search Console sites: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
@@ -141,7 +141,7 @@ export class SearchConsoleService {
       return results;
     } catch (error) {
       console.error('Error fetching all Search Console sites:', error);
-      throw new Error('Failed to fetch Search Console sites');
+      throw new Error(`Failed to fetch all Search Console sites: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
@@ -305,7 +305,7 @@ export class SearchConsoleService {
       return rows;
     } catch (error) {
       console.error('Error fetching Search Console analytics:', error);
-      return null;
+      throw new Error(`Failed to fetch Search Console analytics: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
@@ -324,7 +324,7 @@ export class SearchConsoleService {
       });
     } catch (error) {
       console.error('Error refreshing token:', error);
-      throw new Error('Failed to refresh access token');
+      throw new Error(`Failed to refresh access token: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
@@ -374,7 +374,7 @@ export class SearchConsoleService {
         );
       }
 
-      throw new Error('Failed to refresh access token');
+      throw new Error(`Failed to refresh access token: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 }

@@ -53,74 +53,79 @@ export class KeywordCannibalizationService {
   async runAudit(campaignId: string, startDate: Date, endDate: Date): Promise<string> {
     console.log(`Starting custom cannibalization audit for campaign ${campaignId} from ${startDate.toISOString()} to ${endDate.toISOString()}`);
     
-    const campaign = await prisma.campaign.findUnique({
-      where: { id: campaignId },
-      include: { googleAccount: true }
-    });
-
-    if (!campaign) {
-      throw new Error('Campaign not found');
-    }
-
-    if (!campaign.googleAccount) {
-      throw new Error('Google account not found for campaign');
-    }
-
-    // Create audit record
-    const audit = await prisma.keywordCannibalizationAudit.create({
-      data: {
-        campaignId,
-        startDate,
-        endDate,
-        auditType: AuditType.CUSTOM,
-        status: AuditStatus.RUNNING
-      }
-    });
-
     try {
-      // Fetch keyword data from Google Search Console
-      const keywordData = await this.fetchKeywordPageData(campaign, campaign.googleAccount, startDate, endDate);
-      
-      if (!keywordData || keywordData.length === 0) {
-        const updatedAudit = await prisma.keywordCannibalizationAudit.update({
-          where: { id: audit.id },
-          data: { 
-            status: AuditStatus.COMPLETED,
-            totalKeywords: 0,
-            cannibalizationCount: 0
-          }
-        });
-        return updatedAudit.id;
+      const campaign = await prisma.campaign.findUnique({
+        where: { id: campaignId },
+        include: { googleAccount: true }
+      });
+
+      if (!campaign) {
+        throw new Error('Campaign not found');
       }
 
-      // Analyze cannibalization
-      const cannibalizationResults = this.analyzeCannibalization(keywordData);
-      
-      // Save results to database
-      await this.saveAuditResults(audit.id, cannibalizationResults);
-      
-      // Update audit status
-      await prisma.keywordCannibalizationAudit.update({
-        where: { id: audit.id },
-        data: { 
-          status: AuditStatus.COMPLETED,
-          totalKeywords: cannibalizationResults.length,
-          cannibalizationCount: cannibalizationResults.filter(r => r.competingPages.length > 0).length
+      if (!campaign.googleAccount) {
+        throw new Error('Google account not found for campaign');
+      }
+
+      // Create audit record
+      const audit = await prisma.keywordCannibalizationAudit.create({
+        data: {
+          campaignId,
+          startDate,
+          endDate,
+          auditType: AuditType.CUSTOM,
+          status: AuditStatus.RUNNING
         }
       });
 
-      console.log(`Completed cannibalization audit ${audit.id}. Found ${cannibalizationResults.length} keywords with ${cannibalizationResults.filter(r => r.competingPages.length > 0).length} showing cannibalization.`);
-      
-      return audit.id;
+      try {
+        // Fetch keyword data from Google Search Console
+        const keywordData = await this.fetchKeywordPageData(campaign, campaign.googleAccount, startDate, endDate);
+        
+        if (!keywordData || keywordData.length === 0) {
+          const updatedAudit = await prisma.keywordCannibalizationAudit.update({
+            where: { id: audit.id },
+            data: { 
+              status: AuditStatus.COMPLETED,
+              totalKeywords: 0,
+              cannibalizationCount: 0
+            }
+          });
+          return updatedAudit.id;
+        }
+
+        // Analyze cannibalization
+        const cannibalizationResults = this.analyzeCannibalization(keywordData);
+        
+        // Save results to database
+        await this.saveAuditResults(audit.id, cannibalizationResults);
+        
+        // Update audit status
+        await prisma.keywordCannibalizationAudit.update({
+          where: { id: audit.id },
+          data: { 
+            status: AuditStatus.COMPLETED,
+            totalKeywords: cannibalizationResults.length,
+            cannibalizationCount: cannibalizationResults.filter(r => r.competingPages.length > 0).length
+          }
+        });
+
+        console.log(`Completed cannibalization audit ${audit.id}. Found ${cannibalizationResults.length} keywords with ${cannibalizationResults.filter(r => r.competingPages.length > 0).length} showing cannibalization.`);
+        
+        return audit.id;
+      } catch (error) {
+        console.error(`Error in cannibalization audit ${audit.id}:`, error);
+        
+        await prisma.keywordCannibalizationAudit.update({
+          where: { id: audit.id },
+          data: { status: AuditStatus.FAILED }
+        });
+        
+        throw new Error(`Failed to run cannibalization audit: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      }
     } catch (error) {
-      console.error(`Error in cannibalization audit ${audit.id}:`, error);
-      
-      await prisma.keywordCannibalizationAudit.update({
-        where: { id: audit.id },
-        data: { status: AuditStatus.FAILED }
-      });
-      
-      throw error;
+      console.error('Error in runAudit:', error);
+      throw new Error(`Failed to initialize cannibalization audit: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
@@ -331,27 +336,32 @@ export class KeywordCannibalizationService {
    * Save audit results to database
    */
   private async saveAuditResults(auditId: string, results: CannibalizationData[]): Promise<void> {
-    for (const result of results) {
-      const cannibalizationResult = await prisma.keywordCannibalizationResult.create({
-        data: {
-          auditId,
-          keyword: result.keyword,
-          topPageUrl: result.topPage.url,
-          topPageImpressions: result.topPage.impressions
-        }
-      });
-
-      // Save competing pages
-      if (result.competingPages.length > 0) {
-        await prisma.keywordCompetingPage.createMany({
-          data: result.competingPages.map(page => ({
-            resultId: cannibalizationResult.id,
-            pageUrl: page.url,
-            impressions: page.impressions,
-            overlapPercentage: page.overlapPercentage
-          }))
+    try {
+      for (const result of results) {
+        const cannibalizationResult = await prisma.keywordCannibalizationResult.create({
+          data: {
+            auditId,
+            keyword: result.keyword,
+            topPageUrl: result.topPage.url,
+            topPageImpressions: result.topPage.impressions
+          }
         });
+
+        // Save competing pages
+        if (result.competingPages.length > 0) {
+          await prisma.keywordCompetingPage.createMany({
+            data: result.competingPages.map(page => ({
+              resultId: cannibalizationResult.id,
+              pageUrl: page.url,
+              impressions: page.impressions,
+              overlapPercentage: page.overlapPercentage
+            }))
+          });
+        }
       }
+    } catch (error) {
+      console.error('Error saving audit results:', error);
+      throw new Error(`Failed to save audit results: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
@@ -364,78 +374,88 @@ export class KeywordCannibalizationService {
     startDate?: Date, 
     endDate?: Date
   ) {
-    // Build where clause for audit filtering
-    const auditWhere: any = { 
-      campaignId,
-      status: AuditStatus.COMPLETED
-    };
+    try {
+      // Build where clause for audit filtering
+      const auditWhere: any = { 
+        campaignId,
+        status: AuditStatus.COMPLETED
+      };
 
-    // If date range is provided, find audits that overlap with this date range
-    // We want audits where the audit period overlaps with our requested period
-    if (startDate && endDate) {
-      auditWhere.AND = [
-        { 
-          OR: [
-            // Audit starts before our end date AND audit ends after our start date
-            {
-              AND: [
-                { startDate: { lte: endDate } },
-                { endDate: { gte: startDate } }
-              ]
-            }
-          ]
-        }
-      ];
-    }
-
-    const existingAudit = await prisma.keywordCannibalizationAudit.findFirst({
-      where: auditWhere,
-      orderBy: { createdAt: 'desc' },
-      include: {
-        results: {
-          include: {
-            competingPages: {
-              orderBy: { overlapPercentage: 'desc' }
-            }
-          },
-          where: {
-            competingPages: {
-              some: {} // Only include results that have competing pages
-            }
-          },
-          take: limit,
-          orderBy: { keyword: 'asc' }
-        }
+      // If date range is provided, find audits that overlap with this date range
+      // We want audits where the audit period overlaps with our requested period
+      if (startDate && endDate) {
+        auditWhere.AND = [
+          { 
+            OR: [
+              // Audit starts before our end date AND audit ends after our start date
+              {
+                AND: [
+                  { startDate: { lte: endDate } },
+                  { endDate: { gte: startDate } }
+                ]
+              }
+            ]
+          }
+        ];
       }
-    });
 
-    // If no results found or no cannibalization, return null to trigger no overlap message
-    if (!existingAudit || !existingAudit.results || existingAudit.results.length === 0) {
-      return null;
+      const existingAudit = await prisma.keywordCannibalizationAudit.findFirst({
+        where: auditWhere,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          results: {
+            include: {
+              competingPages: {
+                orderBy: { overlapPercentage: 'desc' }
+              }
+            },
+            where: {
+              competingPages: {
+                some: {} // Only include results that have competing pages
+              }
+            },
+            take: limit,
+            orderBy: { keyword: 'asc' }
+          }
+        }
+      });
+
+      // If no results found or no cannibalization, return null to trigger no overlap message
+      if (!existingAudit || !existingAudit.results || existingAudit.results.length === 0) {
+        return null;
+      }
+
+      return existingAudit;
+    } catch (error) {
+      console.error('Error getting cannibalization results:', error);
+      throw new Error(`Failed to get cannibalization results: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
-
-    return existingAudit;
   }
 
   /**
    * Get audit history for a campaign
    */
   async getAuditHistory(campaignId: string, limit: number = 10) {
-    return await prisma.keywordCannibalizationAudit.findMany({
-      where: { campaignId },
-      orderBy: { createdAt: 'desc' },
-      take: limit,
-      select: {
-        id: true,
-        auditType: true,
-        status: true,
-        startDate: true,
-        endDate: true,
-        totalKeywords: true,
-        cannibalizationCount: true,
-        createdAt: true
-      }
-    });
+    try {
+      return await prisma.keywordCannibalizationAudit.findMany({
+        where: { campaignId },
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+        select: {
+          id: true,
+          auditType: true,
+          status: true,
+          startDate: true,
+          endDate: true,
+          totalKeywords: true,
+          cannibalizationCount: true,
+          createdAt: true
+        }
+      });
+    } catch (error) {
+      console.error('Error getting audit history:', error);
+      throw new Error(`Failed to get audit history: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
   }
 
   /**
@@ -476,16 +496,21 @@ export class KeywordCannibalizationService {
    * Returns all active campaigns
    */
   async getCampaignsNeedingAudit(): Promise<string[]> {
-    const campaigns = await prisma.campaign.findMany({
-      where: {
-        status: 'ACTIVE'
-      },
-      select: {
-        id: true
-      }
-    });
-    
-    return campaigns.map(campaign => campaign.id);
+    try {
+      const campaigns = await prisma.campaign.findMany({
+        where: {
+          status: 'ACTIVE'
+        },
+        select: {
+          id: true
+        }
+      });
+      
+      return campaigns.map(campaign => campaign.id);
+    } catch (error) {
+      console.error('Error getting campaigns needing audit:', error);
+      throw new Error(`Failed to get campaigns needing audit: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
   }
 
 }
