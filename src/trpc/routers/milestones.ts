@@ -11,49 +11,68 @@ const whatsappService = new WhatsAppService();
 export const milestonesRouter = router({
   // Get all milestone types
   getMilestoneTypes: protectedProcedure.query(async () => {
-    return await prisma.milestoneType.findMany({
-      where: { isActive: true },
-      orderBy: [
-        { type: 'asc' },
-        { position: 'asc' },
-        { threshold: 'asc' },
-      ],
-    });
+    try {
+      return await prisma.milestoneType.findMany({
+        where: { isActive: true },
+        orderBy: [
+          { type: 'asc' },
+          { position: 'asc' },
+          { threshold: 'asc' },
+        ],
+      });
+    } catch (error) {
+      console.error('Error fetching milestone types:', error);
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to fetch milestone types',
+      });
+    }
   }),
 
   // Get milestone preferences for a campaign
   getCampaignMilestonePreferences: protectedProcedure
     .input(z.object({ campaignId: z.string() }))
     .query(async ({ input, ctx }) => {
-      // Verify user has access to this campaign
-      const campaign = await prisma.campaign.findFirst({
-        where: {
-          id: input.campaignId,
-          OR: [
-            { userId: ctx.user.id },
-            { campaignUsers: { some: { userId: ctx.user.id } } },
-          ],
-        },
-      });
+      try {
+        // Verify user has access to this campaign
+        const campaign = await prisma.campaign.findFirst({
+          where: {
+            id: input.campaignId,
+            OR: [
+              { userId: ctx.user.id },
+              { campaignUsers: { some: { userId: ctx.user.id } } },
+            ],
+          },
+        });
 
-      if (!campaign) {
+        if (!campaign) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'Campaign not found or access denied',
+          });
+        }
+
+        return await prisma.milestonePreference.findMany({
+          where: { campaignId: input.campaignId },
+          include: {
+            milestoneType: true,
+          },
+          orderBy: [
+            { milestoneType: { type: 'asc' } },
+            { milestoneType: { position: 'asc' } },
+            { milestoneType: { threshold: 'asc' } },
+          ],
+        });
+      } catch (error) {
+        console.error('Error fetching campaign milestone preferences:', error);
+        if (error instanceof TRPCError) {
+          throw error;
+        }
         throw new TRPCError({
-          code: 'NOT_FOUND',
-          message: 'Campaign not found or access denied',
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to fetch campaign milestone preferences',
         });
       }
-
-      return await prisma.milestonePreference.findMany({
-        where: { campaignId: input.campaignId },
-        include: {
-          milestoneType: true,
-        },
-        orderBy: [
-          { milestoneType: { type: 'asc' } },
-          { milestoneType: { position: 'asc' } },
-          { milestoneType: { threshold: 'asc' } },
-        ],
-      });
     }),
 
   // Update milestone preferences for a campaign
@@ -72,61 +91,72 @@ export const milestonesRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      // Verify user has admin access to this campaign
-      const campaign = await prisma.campaign.findFirst({
-        where: {
-          id: input.campaignId,
-          OR: [
-            { userId: ctx.user.id },
-            { 
-              campaignUsers: { 
-                some: { 
-                  userId: ctx.user.id,
-                  role: 'ADMIN',
+      try {
+        // Verify user has admin access to this campaign
+        const campaign = await prisma.campaign.findFirst({
+          where: {
+            id: input.campaignId,
+            OR: [
+              { userId: ctx.user.id },
+              { 
+                campaignUsers: { 
+                  some: { 
+                    userId: ctx.user.id,
+                    role: 'ADMIN',
+                  } 
                 } 
-              } 
-            },
-          ],
-        },
-      });
-
-      if (!campaign) {
-        throw new TRPCError({
-          code: 'NOT_FOUND',
-          message: 'Campaign not found or insufficient permissions',
+              },
+            ],
+          },
         });
-      }
 
-      // Update or create preferences
-      const results = await Promise.all(
-        input.preferences.map(async (pref) => {
-          return await prisma.milestonePreference.upsert({
-            where: {
-              campaignId_milestoneTypeId: {
+        if (!campaign) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'Campaign not found or insufficient permissions',
+          });
+        }
+
+        // Update or create preferences
+        const results = await Promise.all(
+          input.preferences.map(async (pref) => {
+            return await prisma.milestonePreference.upsert({
+              where: {
+                campaignId_milestoneTypeId: {
+                  campaignId: input.campaignId,
+                  milestoneTypeId: pref.milestoneTypeId,
+                },
+              },
+              update: {
+                emailEnabled: pref.emailEnabled,
+                whatsappEnabled: pref.whatsappEnabled,
+                isActive: pref.isActive,
+              },
+              create: {
                 campaignId: input.campaignId,
                 milestoneTypeId: pref.milestoneTypeId,
+                emailEnabled: pref.emailEnabled,
+                whatsappEnabled: pref.whatsappEnabled,
+                isActive: pref.isActive,
               },
-            },
-            update: {
-              emailEnabled: pref.emailEnabled,
-              whatsappEnabled: pref.whatsappEnabled,
-              isActive: pref.isActive,
-            },
-            create: {
-              campaignId: input.campaignId,
-              milestoneTypeId: pref.milestoneTypeId,
-              emailEnabled: pref.emailEnabled,
-              whatsappEnabled: pref.whatsappEnabled,
-              isActive: pref.isActive,
-            },
-            include: {
-              milestoneType: true,
-            },
-          });
-        })
-      );
+              include: {
+                milestoneType: true,
+              },
+            });
+          })
+        );
 
-      return results;
+        return results;
+      } catch (error) {
+        console.error('Error updating campaign milestone preferences:', error);
+        if (error instanceof TRPCError) {
+          throw error;
+        }
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to update campaign milestone preferences',
+        });
+      }
     }),
 
   // Get WhatsApp groups from Whapi API
@@ -181,30 +211,41 @@ export const milestonesRouter = router({
   getCampaignWhatsAppGroups: protectedProcedure
     .input(z.object({ campaignId: z.string() }))
     .query(async ({ input, ctx }) => {
-      // Verify user has access to this campaign
-      const campaign = await prisma.campaign.findFirst({
-        where: {
-          id: input.campaignId,
-          OR: [
-            { userId: ctx.user.id },
-            { campaignUsers: { some: { userId: ctx.user.id } } },
-          ],
-        },
-      });
+      try {
+        // Verify user has access to this campaign
+        const campaign = await prisma.campaign.findFirst({
+          where: {
+            id: input.campaignId,
+            OR: [
+              { userId: ctx.user.id },
+              { campaignUsers: { some: { userId: ctx.user.id } } },
+            ],
+          },
+        });
 
-      if (!campaign) {
+        if (!campaign) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'Campaign not found or access denied',
+          });
+        }
+
+        return await prisma.campaignWhatsAppGroup.findMany({
+          where: { campaignId: input.campaignId },
+          include: {
+            whatsAppGroup: true,
+          },
+        });
+      } catch (error) {
+        console.error('Error fetching campaign WhatsApp groups:', error);
+        if (error instanceof TRPCError) {
+          throw error;
+        }
         throw new TRPCError({
-          code: 'NOT_FOUND',
-          message: 'Campaign not found or access denied',
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to fetch campaign WhatsApp groups',
         });
       }
-
-      return await prisma.campaignWhatsAppGroup.findMany({
-        where: { campaignId: input.campaignId },
-        include: {
-          whatsAppGroup: true,
-        },
-      });
     }),
 
   // Connect WhatsApp groups to a campaign

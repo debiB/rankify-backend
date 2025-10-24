@@ -65,8 +65,7 @@ export class ArticleStructureService {
       return this.parseStructureResponse(response);
     } catch (error) {
       console.error('Error generating structure with AI:', error);
-      // Fallback to default structure if AI fails
-      return this.createDefaultStructure(keywordAnalysis);
+      throw new Error(`Failed to generate structure with AI: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
   
@@ -166,7 +165,7 @@ export class ArticleStructureService {
       return structure;
     } catch (error) {
       console.error('Error parsing structure response:', error);
-      throw new Error('Failed to parse AI response into valid structure format');
+      throw new Error(`Failed to parse AI response into valid structure format: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
   
