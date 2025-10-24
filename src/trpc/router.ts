@@ -13,6 +13,7 @@ import { milestonesRouter } from './routers/milestones';
 import { whatsappRouter } from './routers/whatsapp';
 import { keywordCannibalizationRouter } from './routers/keywordCannibalization';
 import { settingsRouter } from './routers/settings';
+import { leadsRouter } from './routers/leads';
 
 export const appRouter = router({
   auth: authRouter,
@@ -28,6 +29,7 @@ export const appRouter = router({
   whatsapp: whatsappRouter,
   keywordCannibalization: keywordCannibalizationRouter,
   settings: settingsRouter,
+  leads: leadsRouter,
 });
 
 export type AppRouter = typeof appRouter;
