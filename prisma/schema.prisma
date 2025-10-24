@@ -592,6 +592,7 @@ model Lead {
   source       String   // e.g., "organic"
   starRating   Int?     // 1-5
   isDealClosed Boolean  @default(false) // נסגרה עסקה
+  workCompleted Boolean @default(false) // סטטוס עבודה הושלם?
   dealAmount   Float?   // שיווי עסקה
   utmSource    String?
   utmMedium    String?

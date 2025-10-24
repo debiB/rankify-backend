@@ -40,8 +40,11 @@ router.post('/wordpress', async (req, res) => {
       deal_amount,
     } = req.body || {};
 
-    if (!name || !email) {
-      return res.status(400).json({ ok: false, error: 'name and email are required' });
+    // Require at least name and one contact (email or phone)
+    if (!name || (!email && !phone)) {
+      return res
+        .status(400)
+        .json({ ok: false, error: 'name and at least one of email or phone are required' });
     }
 
     // Drop paid UTM
@@ -50,6 +53,26 @@ router.post('/wordpress', async (req, res) => {
     }
 
     const submittedAt = created ? new Date(created) : undefined;
+
+    // Deduplicate: skip if a recent lead (10 min window) exists with same email or phone
+    const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
+    const existing = await prisma.lead.findFirst({
+      where: {
+        AND: [
+          { createdAt: { gte: tenMinutesAgo } },
+          {
+            OR: [
+              email ? { email } : undefined,
+              phone ? { phone } : undefined,
+            ].filter(Boolean) as any,
+          },
+        ],
+      },
+    });
+    if (existing) {
+      return res.status(200).json({ ok: true, skipped: true, reason: 'duplicate_recent', id: existing.id });
+    }
+
     const starRating =
       star_rating !== undefined && star_rating !== null && !isNaN(Number(star_rating))
         ? Math.max(1, Math.min(5, Math.round(Number(star_rating))))
@@ -90,6 +113,7 @@ router.post('/wordpress', async (req, res) => {
       source: lead.source,
       starRating: lead.starRating ?? undefined,
       isDealClosed: lead.isDealClosed,
+      // workCompleted not editable yet via webhook; remains default
       dealAmount: lead.dealAmount ?? undefined,
       utmSource: lead.utmSource ?? undefined,
       utmMedium: lead.utmMedium ?? undefined,
