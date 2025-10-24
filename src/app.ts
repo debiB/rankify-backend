@@ -12,6 +12,7 @@ import { splitUserNames } from './utils/splitUserNames';
 import oauthRoutes from './routes/oauth';
 import { CronService } from './services/cronService';
 import webhooksRoutes from './routes/webhooks';
+import leadsRoutes from './routes/leads';
 
 // Load environment variables
 dotenv.config();
@@ -45,6 +46,9 @@ app.use('/auth', oauthRoutes);
 
 // Webhooks
 app.use('/webhooks', webhooksRoutes);
+
+// Leads REST API
+app.use('/leads', leadsRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {

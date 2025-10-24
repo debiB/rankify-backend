@@ -7,6 +7,7 @@ export interface LeadPayload {
   source: string;
   starRating?: number | null;
   isDealClosed?: boolean;
+  workCompleted?: boolean | null;
   dealAmount?: number | null;
   utmSource?: string | null;
   utmMedium?: string | null;
@@ -37,6 +38,7 @@ export class SlackService {
     const utm = [lead.utmSource, lead.utmMedium, lead.utmCampaign].filter(Boolean).join('/');
     if (utm) lines.push(`UTM: ${utm}`);
     if (typeof lead.starRating === 'number') lines.push(`Rating: ${lead.starRating}/5`);
+    if (typeof lead.workCompleted === 'boolean') lines.push(`Work Status: ${lead.workCompleted ? 'Completed' : 'Not completed'}`);
     if (typeof lead.dealAmount === 'number') lines.push(`Deal Amount: ${lead.dealAmount}`);
     if (typeof lead.isDealClosed === 'boolean') lines.push(`Deal Closed: ${lead.isDealClosed ? 'Yes' : 'No'}`);
 

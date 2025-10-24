@@ -113,6 +113,7 @@ router.post('/wordpress', async (req, res) => {
       source: lead.source,
       starRating: lead.starRating ?? undefined,
       isDealClosed: lead.isDealClosed,
+      workCompleted: (lead as any).workCompleted ?? undefined,
       // workCompleted not editable yet via webhook; remains default
       dealAmount: lead.dealAmount ?? undefined,
       utmSource: lead.utmSource ?? undefined,
